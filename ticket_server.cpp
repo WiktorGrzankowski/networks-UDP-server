@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <vector>
+#include <map>
 
 #include "err.hpp"
 
@@ -17,6 +18,7 @@
 #define MAX_MESSAGE_LENGTH 65435
 
 char shared_buffer[BUFFER_SIZE];
+
 
 typedef struct eventS event;
 
@@ -27,7 +29,29 @@ struct eventS {
     uint16_t tickets_available;
 };
 
+typedef struct reservationS reservation;
 
+struct reservationS {
+    uint32_t reservation_id;
+    uint16_t ticket_count;
+    uint32_t event_id;
+};
+
+/*
+ * Key: event_id in little endian
+ * Value: event struct
+*/
+using eventsMap = std::map<uint32_t, event>;
+
+uint32_t calc_potential_event_id() {
+    uint32_t potential_event_id = 0;
+    uint32_t multiplier = 1;
+    for (int i = 4; i >= 1; --i) {
+        potential_event_id += multiplier * ((int) shared_buffer[i]);
+        multiplier *= 256;
+    }
+    return potential_event_id;
+}
 
 uint16_t read_port(char *string) {
     errno = 0;
@@ -65,15 +89,6 @@ size_t read_message(int socket_fd, struct sockaddr_in *client_address,
     errno = 0;
     ssize_t len = recvfrom(socket_fd, buffer, max_length, flags,
                            (struct sockaddr *)client_address, &address_length);
-    if (buffer[0] == 1) {
-        std::cout << "get_events\n";
-    } else if (buffer[0] == 3) {
-        std::cout << "get_reservation\n";
-        // poza tym event_id, ticket_count > 0
-    } else if (buffer[0] == 5) {
-        std::cout << "get_tickets";
-        // poza tym reservation_id, cookie
-    }
                     
     if (len < 0) {
         PRINT_ERRNO();
@@ -81,28 +96,57 @@ size_t read_message(int socket_fd, struct sockaddr_in *client_address,
     return (size_t)len;
 }
 
+void send_reservation(int socket_fd, const struct sockaddr_in *client_address,  eventsMap &events) {
+    socklen_t address_length = (socklen_t)sizeof(*client_address);
+    int flags = 0;
+    std::string reservation_message;
+    size_t current_index = 0;
 
-void send_get_events(int socket_fd, const struct sockaddr_in *client_address,  std::vector<event> &events) {
+
+
+
+
+
+
+
+
+    ssize_t sent_length = sendto(socket_fd, reservation_message.c_str(), current_index, flags, (struct sockaddr *)client_address, address_length);
+    ENSURE(sent_length == (ssize_t)reservation_message.length());
+}
+
+void send_bad_request(int socket_fd, const struct sockaddr_in *client_address) {
+    socklen_t address_length = (socklen_t)sizeof(*client_address);
+    int flags = 0;
+    std::string message;
+    message += char(255);
+    size_t length;
+    ssize_t sent_length = sendto(socket_fd, message.c_str(), length, flags, (struct sockaddr *)client_address, address_length);
+    ENSURE(sent_length == (ssize_t)length);
+}
+
+void send_events(int socket_fd, const struct sockaddr_in *client_address,  eventsMap &events) {
     socklen_t address_length = (socklen_t)sizeof(*client_address);
     int flags = 0;
 
     uint32_t current_index = 1; // where to add new characters
     std::string events_message(65535, '\0'); 
     events_message[0] = char(2);
-    for (event ev : events) {
+    for (auto ev : events) {
+        uint16_t tickets_count_copy = ev.second.tickets_available;
+        tickets_count_copy = htons(tickets_count_copy); // send in big endian
         if (current_index > MAX_MESSAGE_LENGTH) // no more place to write onto
             break;
-        memcpy(&events_message[current_index], &ev.event_id, sizeof(ev.event_id));
-        current_index += sizeof(ev.event_id); 
+        memcpy(&events_message[current_index], &ev.second.event_id, sizeof(ev.second.event_id));
+        current_index += sizeof(ev.second.event_id); // event_id is kept and sent in big endian
         
-        memcpy(&events_message[current_index], &ev.tickets_available, sizeof(ev.tickets_available));
-        current_index += sizeof(ev.tickets_available);
+        memcpy(&events_message[current_index], &tickets_count_copy, sizeof(tickets_count_copy));
+        current_index += sizeof(tickets_count_copy); // tickets count is sent in big endian
         
-        memcpy(&events_message[current_index], &ev.description_length, sizeof(ev.description_length));
-        current_index += sizeof(ev.description_length);
+        memcpy(&events_message[current_index], &ev.second.description_length, sizeof(ev.second.description_length));
+        current_index += sizeof(ev.second.description_length); // only one byte, so big endian as well
         
-        strcpy(&events_message[current_index], ev.description.c_str());
-        current_index += ev.description.size();
+        strcpy(&events_message[current_index], ev.second.description.c_str());
+        current_index += ev.second.description.size();
     }
     events_message.resize(current_index);
     printf("\n%s\n", events_message.c_str());
@@ -124,7 +168,7 @@ void check_port_num(char *port_c) {
         if (!isdigit(c)) fatal("Wrong port number provided");
     }
     int value = atoi(port_c);
-    if (value < 1024 || value > 65535) fatal("Wrong port number provided");
+    if (value < 0 || value > 65535) fatal("Wrong port number provided");
 }
 
 void check_timeout_value(char *timeout_c) {
@@ -166,26 +210,48 @@ void read_input(int argc, char *argv[], uint16_t *port_num, uint16_t *timeout,
     }
 }
 
-std::vector<event> read_events(char *filename) {
+eventsMap read_events(char *filename) {
     FILE *fp;
     fp = fopen(filename, "r");
     std::ifstream file(filename);
-    std::vector<event> events;
+    eventsMap events;
     uint32_t event_num = 0;
+    uint32_t event_num_iter = 0;
     if (file.is_open()) {
         std::string line;
         while (std::getline(file, line)) {
             std::string description = line;
             std::getline(file, line);
             uint16_t tickets_available = stoi(line);
-            char description_length =  static_cast<char>(description.length());
-            events.push_back(event({event_num, description_length, description, tickets_available}));
-            event_num++;
+            // tickets_available = htons(tickets_available);
+            char description_length = static_cast<char>(description.length());
+            event_num = htonl(event_num_iter);
+            events[event_num_iter] = event({event_num, description_length, description, tickets_available});
+            // events.push_back(event({event_num, description_length, description, tickets_available}));
+            event_num_iter++;
         }
         file.close();
     }
     fclose(fp);
     return events;
+}
+
+bool check_reservation_arguments(eventsMap &events) {
+    uint32_t potential_event_id = calc_potential_event_id();
+    if (events.find(potential_event_id) == events.end()) {
+        printf("BAAAD VERY BAD REQUEST po id = %d\n", potential_event_id);
+        return false;
+    } 
+    printf("Spoks request po id = %d\n", potential_event_id);
+    // teraz ile biletow
+    int16_t potential_ticket_count = 0;
+    potential_ticket_count += (((int) shared_buffer[5]) * 256) + ((int) shared_buffer[6]);
+    if (potential_ticket_count <= 0 || events[potential_event_id].tickets_available < potential_ticket_count) {
+        printf("bad oj veri bad liczba biletow = %d\n", potential_ticket_count);
+        return false;
+    } 
+    printf("jest git\n");
+    return true;
 }
 
 /*
@@ -202,11 +268,12 @@ int main(int argc, char *argv[]) {
     read_input(argc, argv, &port, &timeout, &filename);
     // std::cout << filename << " " << port_num << " " << timeout << '\n';
 
-    std::vector<event> events = read_events(filename);
+    std::map<uint32_t, event> events = read_events(filename);
     for (auto &ev : events) {
-        std::cout << "rozmiar id = " << sizeof(ev.event_id) <<" rozmiar len = "<<sizeof(ev.description_length)<<"rozmiar desc= "<<
-            ev.description.size() <<" sizeof tickets = " << sizeof(ev.tickets_available)<< "   i  ";
-        std::cout << ev.event_id << " "<< (int)ev.description_length <<" "<< ev.description  << " " << ev.tickets_available << '\n';
+        
+        std::cout << "rozmiar id = " << sizeof(ev.second.event_id) <<" rozmiar len = "<<sizeof(ev.second.description_length)<<"rozmiar desc= "<<
+            ev.second.description.size() <<" sizeof tickets = " << sizeof(ev.second.tickets_available)<< "   i  ";
+        std::cout << ev.second.event_id << " "<< (int)ev.second.description_length <<" "<< ev.second.description  << " " << ev.second.tickets_available << '\n';
     }
 
     printf("Listening on port %u\n", port);
@@ -218,17 +285,31 @@ int main(int argc, char *argv[]) {
     struct sockaddr_in client_address;
     size_t read_length;
     do {
-        read_length = read_message(socket_fd, &client_address, shared_buffer,
-        // wczytane np getEvents
-
-
-        sizeof(shared_buffer)); char* client_ip = inet_ntoa(client_address.sin_addr); 
+        read_length = read_message(socket_fd, &client_address, shared_buffer, sizeof(shared_buffer)); 
+        char* client_ip = inet_ntoa(client_address.sin_addr); 
         uint16_t client_port = ntohs(client_address.sin_port); printf("received %zd bytes from"
         "client %s:%u: '%.*s'\n", read_length, client_ip, client_port,
                (int) read_length, shared_buffer); // note: we specify the length of the printed string
 
-        if (shared_buffer[0] == 1) {
-            send_get_events(socket_fd, &client_address, events);
+        if (shared_buffer[0] == 1 && read_length == 1) {
+            send_events(socket_fd, &client_address, events);
+        } else if (shared_buffer[0] == 3 && read_length == 7) {
+            if (check_reservation_arguments(events))
+                send_reservation(socket_fd, &client_address, events);
+            else {
+                // wyslij bad request
+                send_bad_request(socket_fd, &client_address);
+            }
+            std::cout << "AAAAAAAAAAAAAAAAAAAAAAa\n";
+            for (int i = 0; i < read_length; ++i) {
+                printf("%d ", shared_buffer[i]);
+            }
+            std::cout << "AAAAAAAAAAAAAAAAAAAAAAa\n";
+
+        } else if (shared_buffer[0] == 5 && read_length == 53) {
+            // get tickets
+        } else {
+            // wrong query
         }
         
         
