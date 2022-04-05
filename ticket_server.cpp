@@ -142,13 +142,15 @@ std::string generate_ticket() {
     return ticket;
 }
 
-reservation create_reservation(uint16_t timeout) {
+reservation create_reservation(uint16_t timeout, eventsMap &events) {
     reservation result;
     result.cookie = generate_cookie();
     result.event_id = calc_event_id();
-    result.ticket_count = (uint16_t)(((int) shared_buffer[5]) * MAX_BYTE_VALUE + 1) + ((int) shared_buffer[6]);
+    result.ticket_count = (uint16_t)(((int) shared_buffer[5]) * (MAX_BYTE_VALUE + 1)) + ((int) shared_buffer[6]);
     result.reservation_id = result.event_id + MIN_RESERVATION_ID;
     result.expiration_time = time(0) + timeout;
+    events[result.event_id].tickets_available -= result.ticket_count;
+
     for (int i = 0; i < result.ticket_count; ++i) {
         std::string ticket = generate_ticket();
         result.tickets.push_back(ticket);
@@ -163,8 +165,11 @@ void send_reservation(int socket_fd, const struct sockaddr_in *client_address,  
     socklen_t address_length = (socklen_t)sizeof(*client_address);
     int flags = 0;
 
-    reservation to_be_sent = create_reservation(timeout);
+    reservation to_be_sent = create_reservation(timeout, events);
     reservations[to_be_sent.event_id] = to_be_sent;
+
+    std::cout << to_be_sent.ticket_count << " aa" << "\n\n";
+
     uint32_t current_index = 1;
     std::string reservation_message(65535, '\0');
     // +1
@@ -328,7 +333,7 @@ bool check_reservation_arguments(eventsMap &events) {
         printf("BAAAD VERY BAD REQUEST po id = %d\n", potential_event_id);
         return false;
     } 
-    printf("Spoks request po id = %d\n", potential_event_id);
+    // printf("Spoks request po id = %d\n", potential_event_id);
     // teraz ile biletow
     int16_t potential_ticket_count = 0;
     potential_ticket_count += (((int) shared_buffer[5]) * 256) + ((int) shared_buffer[6]);
@@ -336,7 +341,7 @@ bool check_reservation_arguments(eventsMap &events) {
         printf("bad oj veri bad liczba biletow = %d\n", potential_ticket_count);
         return false;
     } 
-    printf("jest git\n");
+    // printf("jest git\n");
     return true;
 }
 
@@ -385,11 +390,11 @@ int main(int argc, char *argv[]) {
             else {
                 send_bad_request(socket_fd, &client_address);
             }
-            std::cout << "AAAAAAAAAAAAAAAAAAAAAAa\n";
+            // std::cout << "AAAAAAAAAAAAAAAAAAAAAAa\n";
             for (int i = 0; i < read_length; ++i) {
                 printf("%d ", shared_buffer[i]);
             }
-            std::cout << "AAAAAAAAAAAAAAAAAAAAAAa\n";
+            // std::cout << "AAAAAAAAAAAAAAAAAAAAAAa\n";
 
         } else if (shared_buffer[0] == 5 && read_length == 53) {
             // get tickets
