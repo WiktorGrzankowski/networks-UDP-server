@@ -13,16 +13,21 @@
 
 #include "err.hpp"
 
-#define BUFFER_SIZE 10
+#define BUFFER_SIZE 80
+#define MAX_MESSAGE_LENGTH 65435
 
 char shared_buffer[BUFFER_SIZE];
 
 typedef struct eventS event;
 
 struct eventS {
+    uint32_t event_id;
+    char description_length;
     std::string description;
     uint16_t tickets_available;
 };
+
+
 
 uint16_t read_port(char *string) {
     errno = 0;
@@ -60,19 +65,56 @@ size_t read_message(int socket_fd, struct sockaddr_in *client_address,
     errno = 0;
     ssize_t len = recvfrom(socket_fd, buffer, max_length, flags,
                            (struct sockaddr *)client_address, &address_length);
+    if (buffer[0] == 1) {
+        std::cout << "get_events\n";
+    } else if (buffer[0] == 3) {
+        std::cout << "get_reservation\n";
+        // poza tym event_id, ticket_count > 0
+    } else if (buffer[0] == 5) {
+        std::cout << "get_tickets";
+        // poza tym reservation_id, cookie
+    }
+                    
     if (len < 0) {
         PRINT_ERRNO();
     }
     return (size_t)len;
 }
 
-void send_message(int socket_fd, const struct sockaddr_in *client_address,
-                  const char *message, size_t length) {
+
+void send_get_events(int socket_fd, const struct sockaddr_in *client_address,  std::vector<event> &events) {
     socklen_t address_length = (socklen_t)sizeof(*client_address);
     int flags = 0;
-    ssize_t sent_length =
-        sendto(socket_fd, message, length, flags,
-               (struct sockaddr *)client_address, address_length);
+
+    uint32_t current_index = 1; // where to add new characters
+    std::string events_message(65535, '\0'); 
+    events_message[0] = char(2);
+    for (event ev : events) {
+        if (current_index > MAX_MESSAGE_LENGTH) // no more place to write onto
+            break;
+        memcpy(&events_message[current_index], &ev.event_id, sizeof(ev.event_id));
+        current_index += sizeof(ev.event_id); 
+        
+        memcpy(&events_message[current_index], &ev.tickets_available, sizeof(ev.tickets_available));
+        current_index += sizeof(ev.tickets_available);
+        
+        memcpy(&events_message[current_index], &ev.description_length, sizeof(ev.description_length));
+        current_index += sizeof(ev.description_length);
+        
+        strcpy(&events_message[current_index], ev.description.c_str());
+        current_index += ev.description.size();
+    }
+    events_message.resize(current_index);
+    printf("\n%s\n", events_message.c_str());
+    ssize_t sent_length = sendto(socket_fd, events_message.c_str(), current_index, flags, (struct sockaddr *)client_address, address_length);
+    ENSURE(sent_length == (ssize_t)events_message.length());
+}
+
+void send_message(int socket_fd, const struct sockaddr_in *client_address,
+                  const char *message, size_t length, std::vector<event> &events) {
+    socklen_t address_length = (socklen_t)sizeof(*client_address);
+    int flags = 0;
+    ssize_t sent_length = sendto(socket_fd, message, length, flags, (struct sockaddr *)client_address, address_length);
     ENSURE(sent_length == (ssize_t)length);
 }
 
@@ -129,13 +171,16 @@ std::vector<event> read_events(char *filename) {
     fp = fopen(filename, "r");
     std::ifstream file(filename);
     std::vector<event> events;
+    uint32_t event_num = 0;
     if (file.is_open()) {
         std::string line;
         while (std::getline(file, line)) {
             std::string description = line;
             std::getline(file, line);
             uint16_t tickets_available = stoi(line);
-            events.push_back(event({description, tickets_available}));
+            char description_length =  static_cast<char>(description.length());
+            events.push_back(event({event_num, description_length, description, tickets_available}));
+            event_num++;
         }
         file.close();
     }
@@ -151,42 +196,48 @@ std::vector<event> read_events(char *filename) {
  * domyślnie 5.
  */
 int main(int argc, char *argv[]) {
-    uint16_t port_num = 2022;
+    uint16_t port = 2022;
     uint16_t timeout = 5;
     char *filename;
-    read_input(argc, argv, &port_num, &timeout, &filename);
-    std::cout << filename << " " << port_num << " " << timeout << '\n';
+    read_input(argc, argv, &port, &timeout, &filename);
+    // std::cout << filename << " " << port_num << " " << timeout << '\n';
 
     std::vector<event> events = read_events(filename);
     for (auto &ev : events) {
-        std::cout << ev.description << " " << ev.tickets_available << '\n';
+        std::cout << "rozmiar id = " << sizeof(ev.event_id) <<" rozmiar len = "<<sizeof(ev.description_length)<<"rozmiar desc= "<<
+            ev.description.size() <<" sizeof tickets = " << sizeof(ev.tickets_available)<< "   i  ";
+        std::cout << ev.event_id << " "<< (int)ev.description_length <<" "<< ev.description  << " " << ev.tickets_available << '\n';
     }
 
-    return 0;
-
-    // uint16_t port = read_port(argv[1]);
-    // printf("Listening on port %u\n", port);
+    printf("Listening on port %u\n", port);
 
     // memset(shared_buffer, 0, sizeof(shared_buffer));
 
-    // int socket_fd = bind_socket(port);
+    int socket_fd = bind_socket(port);
 
-    // struct sockaddr_in client_address;
-    // size_t read_length;
-    // do {
-    //     read_length = read_message(socket_fd, &client_address, shared_buffer,
-    //     sizeof(shared_buffer)); char* client_ip =
-    //     inet_ntoa(client_address.sin_addr); uint16_t client_port =
-    //     ntohs(client_address.sin_port); printf("received %zd bytes from
-    //     client %s:%u: '%.*s'\n", read_length, client_ip, client_port,
-    //            (int) read_length, shared_buffer); // note: we specify the
-    //            length of the printed string
-    //     send_message(socket_fd, &client_address, shared_buffer, read_length);
+    struct sockaddr_in client_address;
+    size_t read_length;
+    do {
+        read_length = read_message(socket_fd, &client_address, shared_buffer,
+        // wczytane np getEvents
 
-    // } while (read_length > 0);
-    // printf("finished exchange\n");
 
-    // CHECK_ERRNO(close(socket_fd));
+        sizeof(shared_buffer)); char* client_ip = inet_ntoa(client_address.sin_addr); 
+        uint16_t client_port = ntohs(client_address.sin_port); printf("received %zd bytes from"
+        "client %s:%u: '%.*s'\n", read_length, client_ip, client_port,
+               (int) read_length, shared_buffer); // note: we specify the length of the printed string
+
+        if (shared_buffer[0] == 1) {
+            send_get_events(socket_fd, &client_address, events);
+        }
+        
+        
+        // send_message(socket_fd, &client_address, shared_buffer, read_length, events);
+
+    } while (read_length > 0);
+    printf("finished exchange\n");
+
+    CHECK_ERRNO(close(socket_fd));
 
     // return 0;
 }
