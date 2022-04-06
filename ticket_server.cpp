@@ -91,7 +91,7 @@ bool tickets_expired(reservationsMap &reservations) {
     if (!reservations[reservation_id].tickets_received &&
         reservations[reservation_id].expiration_time < current_time) {
             return true;
-        }
+    }
     return false;
 }
 
@@ -102,7 +102,7 @@ bool cookies_match(std::string real_cookie) {
             return false;
         }
     }
-    printf("dobrze jest\n");
+    //printf("dobrze jest\n");
     return true;
 }
 
@@ -113,22 +113,22 @@ bool tickets_arguments_are_correct(reservationsMap &reservations) {
     if (potential_reservation_id < MIN_RESERVATION_ID)
         return false;
     if (reservations.find(potential_reservation_id) == reservations.end()) {
-        printf("niedobry request o ticketsy = %d\n", potential_reservation_id);
+        //printf("niedobry request o ticketsy = %d\n", potential_reservation_id);
         return false;
     }
-    printf("chce sobie wziac cookie\n");
+    //printf("chce sobie wziac cookie\n");
     // std::string potential_cookie = get_cookie();
-    // printf("moje potential cookie ma wgl size %d", potential_cookie.size());
+    // //printf("moje potential cookie ma wgl size %d", potential_cookie.size());
     if (!cookies_match(reservations[potential_reservation_id].cookie)) {
-        printf("nie pasuje ciasteczko");
+        //printf("nie pasuje ciasteczko");
         return false;
     }
     if (MAX_UDP_DATAGRAM_SIZE < TICKET_LENGTH * reservations[potential_reservation_id].ticket_count) {
-        printf("bilety nie mieszcza sie w jednym datagramie");
+        //printf("bilety nie mieszcza sie w jednym datagramie");
         return false;
     }
 
-    printf("dobry requescik\n");
+    //printf("dobry requescik\n");
     return true;
 }
 
@@ -137,18 +137,18 @@ bool reservation_arguments_are_correct(eventsMap &events) {
     if (potential_event_id > MAX_EVENT_ID)
         return false;
     if (events.find(potential_event_id) == events.end()) {
-        printf("BAAAD VERY BAD REQUEST po id = %d\n", potential_event_id);
+        //printf("BAAAD VERY BAD REQUEST po id = %d\n", potential_event_id);
         return false;
     } 
-    // printf("Spoks request po id = %d\n", potential_event_id);
+    // //printf("Spoks request po id = %d\n", potential_event_id);
     // teraz ile biletow
     int16_t potential_ticket_count = 0;
     potential_ticket_count += (((int) shared_buffer[5]) * (MAX_BYTE_VALUE + 1)) + ((int) shared_buffer[6]);
     if (potential_ticket_count <= 0 || events[potential_event_id].tickets_available < potential_ticket_count) {
-        printf("bad oj veri bad liczba biletow = %d\n", potential_ticket_count);
+        //printf("bad oj veri bad liczba biletow = %d\n", potential_ticket_count);
         return false;
     } 
-    // printf("jest git\n");
+    // //printf("jest git\n");
     return true;
 }
 
@@ -233,12 +233,12 @@ std::string generate_ticket() {
     return ticket;
 }
 
-reservation create_reservation(uint16_t timeout, eventsMap &events) {
+reservation create_reservation(uint16_t timeout, eventsMap &events, reservationsMap &reservations) {
     reservation result;
     result.cookie = generate_cookie();
     result.event_id = calc_id();
     result.ticket_count = (uint16_t)(((int) shared_buffer[5]) * (MAX_BYTE_VALUE + 1)) + ((int) shared_buffer[6]);
-    result.reservation_id = MIN_RESERVATION_ID + events.size();
+    result.reservation_id = MIN_RESERVATION_ID + reservations.size();
     result.expiration_time = time(0) + timeout;
     result.tickets_received = false;
     events[result.event_id].tickets_available -= result.ticket_count;
@@ -247,7 +247,7 @@ reservation create_reservation(uint16_t timeout, eventsMap &events) {
         std::string ticket = generate_ticket();
         result.tickets.push_back(ticket);
     }
-    printf("\nstworzona rezerwacja o id = %d\n", result.reservation_id);
+    //printf("\nstworzona rezerwacja o id = %d\n", result.reservation_id);
     return result;
 }
 
@@ -288,7 +288,7 @@ void send_reservation(int socket_fd, const struct sockaddr_in *client_address,  
     socklen_t address_length = (socklen_t)sizeof(*client_address);
     int flags = 0;
 
-    reservation to_be_sent = create_reservation(timeout, events);
+    reservation to_be_sent = create_reservation(timeout, events, reservations);
     reservations[to_be_sent.reservation_id] = to_be_sent;
 
     uint32_t current_index = 1;
@@ -349,7 +349,7 @@ void send_events(int socket_fd, const struct sockaddr_in *client_address,  event
         current_index += ev.second.description.size();
     }
     events_message.resize(current_index);
-    // printf("\n%s\n", events_message.c_str());
+    // //printf("\n%s\n", events_message.c_str());
     ssize_t sent_length = sendto(socket_fd, events_message.c_str(), current_index, flags, (struct sockaddr *)client_address, address_length);
     ENSURE(sent_length == (ssize_t)events_message.length());
 }
@@ -479,9 +479,9 @@ int main(int argc, char *argv[]) {
     reservationsMap reservations;
     eventsMap events = read_events(filename);
     for (auto &ev : events) {
-        std::cout << "rozmiar id = " << sizeof(ev.second.event_id) <<" rozmiar len = "<<sizeof(ev.second.description_length)<<"rozmiar desc= "<<
-            ev.second.description.size() <<" sizeof tickets = " << sizeof(ev.second.tickets_available)<< "   i  ";
-        std::cout << ev.second.event_id << " "<< (int)ev.second.description_length <<" "<< ev.second.description  << " " << ev.second.tickets_available << '\n';
+        // std::cout << "rozmiar id = " << sizeof(ev.second.event_id) <<" rozmiar len = "<<sizeof(ev.second.description_length)<<"rozmiar desc= "<<
+        //     ev.second.description.size() <<" sizeof tickets = " << sizeof(ev.second.tickets_available)<< "   i  ";
+        // std::cout << ev.second.event_id << " "<< (int)ev.second.description_length <<" "<< ev.second.description  << " " << ev.second.tickets_available << '\n';
     }
 
     printf("Listening on port %u\n", port);
