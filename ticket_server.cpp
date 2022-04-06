@@ -19,6 +19,8 @@
 
 #define BUFFER_SIZE 80
 #define MAX_UDP_DATAGRAM_SIZE 65535
+#define MAX_PORT_NUM 65535
+#define MAX_TIMEOUT_VALUE 86400
 #define MAX_MESSAGE_LENGTH 65435
 #define COOKIE_LENGTH 48
 #define MAX_BYTE_VALUE 255
@@ -71,12 +73,15 @@ uint32_t calc_id() {
     uint32_t potential_id = 0;
     uint32_t multiplier = 1;
     for (int i = 4; i >= 1; --i) {
-        potential_id += multiplier * ((int) shared_buffer[i]);
+        printf("%d ", shared_buffer[i]);
+        
+        potential_id += multiplier * ((int) ((shared_buffer[i] + (MAX_BYTE_VALUE + 1)) % (MAX_BYTE_VALUE + 1)));
         multiplier *= (MAX_BYTE_VALUE + 1);
     }
+    std::cout << "\n$$$$$$$$$$$$$$$$$$$$$$$$$$ obliczylem potential_id = " << potential_id << "\n$$$$$$$$$$$$$$$$$$$$$$$$$$$$$\n\n";
     return potential_id;
 }
-
+// 983 040 + 16 896 
 bool message_is_get_events(size_t read_length) {
     return shared_buffer[0] == 1 && read_length == 1;
 }
@@ -129,10 +134,12 @@ void update_reservations_for_event(eventsMap &events, uint32_t event_id) {
 /*todo - to moze miec bledy ze wzgledu na inny endian w reservation_id */
 bool tickets_arguments_are_correct(reservationsMap &reservations) {
     uint32_t potential_reservation_id = calc_id(); // works same as event, 4 bytes each
+    if (potential_reservation_id == 1000069) {
+        printf("----------------------------------------------------------------------------------sprawdzam ten felerny id\n\n");
+    }
+    
     if (potential_reservation_id < MIN_RESERVATION_ID)
         return false;
-
-    
     
     if (reservations.find(potential_reservation_id) == reservations.end()) {
         return false;
@@ -277,6 +284,11 @@ reservation create_reservation(uint16_t timeout, eventsMap &events, reservations
         std::string ticket = generate_ticket();
         result.tickets.push_back(ticket);
     }
+
+    if (result.reservation_id == 1000069) {
+        std::cout << "++++++++++=-=+++++++++++++++++++++++++++++== tak to ten oto id tworzony jest mocno i ma cookie = " <<result.cookie << "\n\n";
+    }
+
     //printf("\nstworzona rezerwacja o id = %d\n", result.reservation_id);
     return result;
 }
@@ -414,7 +426,7 @@ void check_port_num(char *port_c) {
         if (!isdigit(c)) fatal("Wrong port number provided");
     }
     int value = atoi(port_c);
-    if (value < 0 || value > 65535) fatal("Wrong port number provided");
+    if (value < 0 || value > MAX_PORT_NUM) fatal("Wrong port number provided");
 }
 
 void check_timeout_value(char *timeout_c) {
@@ -423,7 +435,7 @@ void check_timeout_value(char *timeout_c) {
         if (!isdigit(c)) fatal("Wrong timeout value provided");
     }
     int value = atoi(timeout_c);
-    if (value < 1 || value > 86400) fatal("Wrong timeout value provided");
+    if (value < 1 || value > MAX_TIMEOUT_VALUE) fatal("Wrong timeout value provided");
 }
 
 void read_input(int argc, char *argv[], uint16_t *port_num, uint16_t *timeout,
