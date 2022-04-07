@@ -18,7 +18,7 @@
 #include "err.hpp"
 
 #define BUFFER_SIZE 80
-#define MAX_UDP_DATAGRAM_SIZE 65535
+#define MAX_UDP_DATAGRAM_SIZE 65507
 #define MAX_PORT_NUM 65535
 #define MAX_TIMEOUT_VALUE 86400
 #define MAX_MESSAGE_LENGTH 65435
@@ -104,7 +104,7 @@ bool tickets_expired(reservationsMap &reservations) {
     uint32_t reservation_id = calc_id(); // reading from shared_buffer
     uint64_t current_time = time(0);
     if (!reservations[reservation_id].tickets_received &&
-        reservations[reservation_id].expiration_time < current_time) {
+        reservations[reservation_id].expiration_time <= current_time) {
             return true;
     }
     return false;
@@ -122,11 +122,13 @@ bool cookies_match(std::string real_cookie) {
 
 void update_reservations_for_event(eventsMap &events, uint32_t event_id) {
     uint64_t current_time = time(0);
+    // printf("porownuje dla id = %d. czas ev = %lu, obecny = %lu\n\n", event_id, events[event_id].unreceived_reservations.front().expiration_time, current_time);
+    // printf("$$$$$$$$$$$$$$$$$$$$$$4 robie update, rezerwacji jest lacznie %lu\n", events[event_id].unreceived_reservations.size());
     while (events[event_id].unreceived_reservations.size() > 0) {
         if (events[event_id].unreceived_reservations.front().tickets_received) {
             events[event_id].unreceived_reservations.pop();
             printf("ZROBILEM POP -----------\n\n-------------\n");
-        } else if (events[event_id].unreceived_reservations.front().expiration_time < current_time) {
+        } else if (events[event_id].unreceived_reservations.front().expiration_time <= current_time) {
             events[event_id].tickets_available += events[event_id].unreceived_reservations.front().ticket_count;
             events[event_id].unreceived_reservations.pop();
             printf("------------------------------\n--------zmiana-----------\n\n");
@@ -140,26 +142,25 @@ void update_reservations_for_event(eventsMap &events, uint32_t event_id) {
 /*todo - to moze miec bledy ze wzgledu na inny endian w reservation_id */
 bool tickets_arguments_are_correct(reservationsMap &reservations) {
     uint32_t potential_reservation_id = calc_id(); // works same as event, 4 bytes each
-    printf("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@sprawdzam ticketsy na reserv_id = %d\n", potential_reservation_id);
+
     if (potential_reservation_id < MIN_RESERVATION_ID)
         return false;
     
   
 
     if (reservations.find(potential_reservation_id) == reservations.end()) {
-        printf("**************** ticketa nie ma w bazie %d\n", potential_reservation_id);
+        // printf("**************** ticketa nie ma w bazie %d\n", potential_reservation_id);
         return false;
     }
     if (!cookies_match(reservations[potential_reservation_id].cookie)) {
-        printf("**************** cookies sie nie zgadzaja w %d\n", potential_reservation_id);
+        // printf("**************** cookies sie nie zgadzaja w %d\n", potential_reservation_id);
         return false;
     }
     if ((MAX_UDP_DATAGRAM_SIZE - 7) < TICKET_LENGTH * reservations[potential_reservation_id].ticket_count) {
-        printf("****************** nie ma miejca na ticket z rez id = %d\n", potential_reservation_id);
+        // printf("****************** nie ma miejca na ticket z rez id = %d\n", potential_reservation_id);
         return false;
     }
-    printf("################################ są git ticketsy na reserv_id = %d  i czy byly odebrane? %d\n", potential_reservation_id,
-    reservations[potential_reservation_id].tickets_received);
+
 
     //printf("dobry requescik\n");
     return true;
@@ -168,6 +169,8 @@ bool tickets_arguments_are_correct(reservationsMap &reservations) {
 bool reservation_arguments_are_correct(eventsMap &events) {
     uint32_t potential_event_id = calc_id();
    
+    // printf("probuje zrobic rezerwacje na %d\n", potential_event_id);
+
     if (potential_event_id > MAX_EVENT_ID)
         return false;
     if (events.find(potential_event_id) == events.end()) {
@@ -180,10 +183,7 @@ bool reservation_arguments_are_correct(eventsMap &events) {
     uint16_t potential_ticket_count = 0;
     
     potential_ticket_count += (uint16_t)(((uint16_t) shared_buffer[5]) * (MAX_BYTE_VALUE + 1)) + (uint16_t((shared_buffer[6] + MAX_BYTE_VALUE + 1) % (MAX_BYTE_VALUE + 1)));
-    // if (potential_event_id == 55) {
-    //     printf("\n****************************   sluchajcie sprawdzam event_id == 55 a chary to [%d] i [%d] *************************\n", 
-    //                                                                 shared_buffer[5], shared_buffer[6]);
-    // } 
+
     if (potential_ticket_count <= 0 || events[potential_event_id].tickets_available < potential_ticket_count) {
         return false;
     } 
@@ -313,8 +313,10 @@ reservation create_reservation(uint16_t timeout, eventsMap &events, reservations
         std::string ticket = generate_ticket(ticketNumber);
         result.tickets.push_back(ticket);
     }
+    events[result.event_id].unreceived_reservations.push(result);
+
     // printf("---0-0-0-0-0-0-0-0-0-0- zrobilem rezerwacje na id = %d\n", result.reservation_id);
-   
+    // printf("rezerwacja ma expiration_time rowny %lu\n", result.expiration_time);
 
     //printf("\nstworzona rezerwacja o id = %d\n", result.reservation_id);
     return result;
@@ -346,7 +348,7 @@ void send_tickets(int socket_fd, const struct sockaddr_in *client_address, reser
 
     reservations[reservation_id].tickets_received = true;
     
-    printf("----------wydaje %d biletow na %d\n", reservations[reservation_id].ticket_count, reservation_id);
+    // printf("----------wydaje %d biletow na %d\n", reservations[reservation_id].ticket_count, reservation_id);
     ssize_t sent_length = sendto(socket_fd, tickets_message.c_str(), current_index, flags, (struct sockaddr *)client_address, address_length);
     ENSURE(sent_length == (ssize_t)tickets_message.length());
 }
@@ -403,8 +405,10 @@ void send_events(int socket_fd, const struct sockaddr_in *client_address,  event
         update_reservations_for_event(events, ev.first);
         uint16_t tickets_count_copy = ev.second.tickets_available;
         tickets_count_copy = htons(tickets_count_copy); // send in big endian
-        if (current_index > MAX_MESSAGE_LENGTH) // no more place to write onto
-            break;
+
+        if (current_index + sizeof(ev.second.event_id) + sizeof(ev.second.tickets_available) + 
+            sizeof(ev.second.description_length) + sizeof(ev.second.description) > MAX_UDP_DATAGRAM_SIZE)
+            break; 
 
         uint32_t event_id_copy = ev.second.event_id;
         event_id_copy = htonl(event_id_copy);  
@@ -516,9 +520,7 @@ eventsMap read_events(char *filename) {
             // event_num = htonl(event_num_iter);
             events[event_num_iter] = Event({event_num_iter, description_length, description, tickets_available});
             // events.push_back(event({event_num, description_length, description, tickets_available}));
-            if(event_num_iter == 55) {
-                printf("\n-------------------event_id == 55 i mam dostepne %d biletow\n\n", tickets_available);
-            }
+    
 
 
             event_num_iter++;
