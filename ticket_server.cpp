@@ -16,6 +16,19 @@
 #include <random>
 #include <queue>
 
+#define BUFFER_SIZE 80
+#define MAX_UDP_DATAGRAM_SIZE 65507
+#define MAX_PORT_NUM 65535
+#define MIN_PORT_NUM 0
+#define MAX_TIMEOUT_VALUE 86400
+#define COOKIE_LENGTH 48
+#define MAX_BYTE_VALUE 255
+#define BAD_REQUEST 255
+#define MIN_RESERVATION_ID 1000000
+#define MAX_EVENT_ID 999999
+#define TICKET_LENGTH 7
+#define MAX_TICKETS_PER_RESERVATION 9357
+
 // Evaluate `x`: if non-zero, describe it as a standard error code and exit with an error.
 #define CHECK(x)                                                          \
     do {                                                                  \
@@ -69,19 +82,7 @@ void fatal(const char *fmt, ...) {
     exit(EXIT_FAILURE);
 }
 
-#define BUFFER_SIZE 80
-#define MAX_UDP_DATAGRAM_SIZE 65507
-#define MAX_PORT_NUM 65535
-#define MAX_TIMEOUT_VALUE 86400
-#define COOKIE_LENGTH 48
-#define MAX_BYTE_VALUE 255
-#define BAD_REQUEST 255
-#define MIN_RESERVATION_ID 1000000
-#define MAX_EVENT_ID 999999
-#define TICKET_LENGTH 7
-
 char shared_buffer[BUFFER_SIZE];
-
 
 typedef struct reservationStruct Reservation;
 
@@ -128,8 +129,10 @@ uint32_t calc_id() {
     return potential_id;
 }
 
+// Calculate ticket count from message stored in shared_buffer.
 uint16_t calc_ticket_count() {
-    return (uint16_t)(((uint16_t) shared_buffer[5]) * (MAX_BYTE_VALUE + 1)) + (uint16_t((shared_buffer[6] + MAX_BYTE_VALUE + 1) % (MAX_BYTE_VALUE + 1)));
+    return (uint16_t)(((uint16_t) shared_buffer[5]) * (MAX_BYTE_VALUE + 1)) + 
+            (uint16_t((shared_buffer[6] + MAX_BYTE_VALUE + 1) % (MAX_BYTE_VALUE + 1)));
 }
 
 bool message_is_get_events(size_t read_length) {
@@ -148,12 +151,14 @@ bool tickets_expired(ReservationsMap &reservations) {
     uint32_t reservation_id = calc_id(); // reading from shared_buffer
     uint64_t current_time = time(0);
     if (!reservations[reservation_id].tickets_received &&
-        reservations[reservation_id].expiration_time <= current_time) {
+        reservations[reservation_id].expiration_time <= current_time) 
             return true;
-    }
+    
     return false;
 }
 
+// Check whether cookie from message stored in shared_buffer
+// is the same as cookie of a given reservation.
 bool cookies_match(std::string real_cookie) {
     for (size_t i = 0; i < real_cookie.length(); ++i) {
         if (real_cookie[i] != shared_buffer[i + 5]) {
@@ -198,7 +203,8 @@ bool reservation_arguments_are_correct(EventsMap &events, ReservationsMap &reser
 
     uint16_t potential_ticket_count = calc_ticket_count();
     
-    return potential_ticket_count > 0 && events[potential_event_id].tickets_available >= potential_ticket_count;
+    return potential_ticket_count > 0 && events[potential_event_id].tickets_available >= potential_ticket_count
+            && potential_ticket_count <= MAX_TICKETS_PER_RESERVATION;
 }
 
 std::string generate_cookie() {
@@ -213,7 +219,6 @@ std::string generate_cookie() {
     
     return cookie;
 }
-
 
 uint16_t read_port(char *string) {
     errno = 0;
@@ -252,9 +257,9 @@ size_t read_message(int socket_fd, struct sockaddr_in *client_address,
     ssize_t len = recvfrom(socket_fd, buffer, max_length, flags,
                            (struct sockaddr *)client_address, &address_length);
                     
-    if (len < 0) {
+    if (len < 0) 
         PRINT_ERRNO();
-    }
+    
     return (size_t)len;
 }
 
@@ -279,9 +284,9 @@ std::string generate_ticket(char *nextTicketNumber) {
         nextTicketNumber[finished_changes]++;
     } else if (nextTicketNumber[finished_changes] == letters_to) {
         // last letter
-        while (finished_changes < TICKET_LENGTH - 1 && nextTicketNumber[finished_changes] == 90) {
+        while (finished_changes < TICKET_LENGTH - 1 && nextTicketNumber[finished_changes] == letters_to) {
             nextTicketNumber[finished_changes] = digits_from;
-            if (nextTicketNumber[finished_changes + 1] != 90) {
+            if (nextTicketNumber[finished_changes + 1] != letters_to) {
                 if (nextTicketNumber[finished_changes + 1] == digits_to) {
                     nextTicketNumber[finished_changes + 1] = letters_from;
                 } else {
@@ -293,6 +298,7 @@ std::string generate_ticket(char *nextTicketNumber) {
             }
         }
     }
+
     for (int i = 0; i < TICKET_LENGTH; ++i) 
         ticket[i] = nextTicketNumber[i];
     
@@ -351,6 +357,7 @@ void send_tickets(int socket_fd, const struct sockaddr_in *client_address, Reser
     
     ssize_t sent_length = sendto(socket_fd, tickets_message.c_str(), current_index, flags, (struct sockaddr *)client_address, address_length);
     ENSURE(sent_length == (ssize_t)tickets_message.length());
+    printf("[SEND TICKETS] Tickets sent successfully.\n");
 }
 
 // Sends a datagram with reservation info. Called only when it is ensured that 
@@ -383,7 +390,7 @@ void send_reservation(int socket_fd, const struct sockaddr_in *client_address,  
     strcpy(&reservation_message[current_index], to_be_sent.cookie.c_str());
     current_index += to_be_sent.cookie.size();
 
-    uint64_t expiration_time_copy = htobe64(to_be_sent.expiration_time);
+    uint64_t expiration_time_copy = htobe64(to_be_sent.expiration_time); // send in big endian
     memcpy(&reservation_message[current_index], &expiration_time_copy, sizeof(expiration_time_copy));
     current_index += sizeof(expiration_time_copy);
 
@@ -391,6 +398,7 @@ void send_reservation(int socket_fd, const struct sockaddr_in *client_address,  
 
     ssize_t sent_length = sendto(socket_fd, reservation_message.c_str(), current_index, flags, (struct sockaddr *)client_address, address_length);
     ENSURE(sent_length == (ssize_t)reservation_message.length());
+    printf("[SEND RESERVATION] Reservation info sent successfully.\n");
 }
 
 // Sends a datagram with info about all events.
@@ -407,7 +415,7 @@ void send_events(int socket_fd, const struct sockaddr_in *client_address,  Event
         tickets_count_copy = htons(tickets_count_copy); // send in big endian
 
         if (current_index + sizeof(ev.second.event_id) + sizeof(ev.second.tickets_available) + 
-            sizeof(ev.second.description_length) + sizeof(ev.second.description) > MAX_UDP_DATAGRAM_SIZE)
+            sizeof(ev.second.description_length) + sizeof(ev.second.description) > MAX_UDP_DATAGRAM_SIZE - 100)
             break; 
 
         uint32_t event_id_copy = ev.second.event_id;
@@ -427,6 +435,7 @@ void send_events(int socket_fd, const struct sockaddr_in *client_address,  Event
     events_message.resize(current_index);
     ssize_t sent_length = sendto(socket_fd, events_message.c_str(), current_index, flags, (struct sockaddr *)client_address, address_length);
     ENSURE(sent_length == (ssize_t)events_message.length());
+    printf("[SEND EVENTS] Events info sent successfully.\n");
 }
 
 void send_bad_reservation_request(int socket_fd, const struct sockaddr_in *client_address) {
@@ -439,6 +448,7 @@ void send_bad_reservation_request(int socket_fd, const struct sockaddr_in *clien
     size_t length = 5;
     ssize_t sent_length = sendto(socket_fd, message.c_str(), length, flags, (struct sockaddr *)client_address, address_length);
     ENSURE(sent_length == (ssize_t)length);
+    printf("[SEND RESERVATION] Bad request.\n");
 }
 
 void send_bad_tickets_request(int socket_fd, const struct sockaddr_in *client_address) {
@@ -451,6 +461,7 @@ void send_bad_tickets_request(int socket_fd, const struct sockaddr_in *client_ad
     size_t length = 5;
     ssize_t sent_length = sendto(socket_fd, message.c_str(), length, flags, (struct sockaddr *)client_address, address_length);
     ENSURE(sent_length == (ssize_t)length);
+    printf("[SEND TICKETS] Bad request.\n");
 }
 
 void check_port_num(char *port_c) {
@@ -459,8 +470,8 @@ void check_port_num(char *port_c) {
         if (!isdigit(c)) 
             fatal("Wrong port number provided");
     }
-    int value = atoi(port_c);
-    if (value < 0 || value > MAX_PORT_NUM) 
+    int32_t value = atoi(port_c);
+    if (value < MIN_PORT_NUM || value > MAX_PORT_NUM) 
         fatal("Wrong port number provided");
 }
 
@@ -486,15 +497,18 @@ void read_input(int argc, char *argv[], uint16_t *port_num, uint16_t *timeout,
 
         if (arg == "-f" && !filename_found) {
             *filename = argv[++i];
-            if (access(*filename, F_OK) != 0) fatal("Wrong filename provided");
+            if (access(*filename, F_OK) != 0) 
+                fatal("Wrong filename provided");
             filename_found = true;
         } else if (arg == "-p" && !port_num_found) {
-            if (argc < i + 2) fatal("Not enough parameters provided");
+            if (argc < i + 2) 
+                fatal("Not enough parameters provided");
             check_port_num(argv[++i]);
             *port_num = atoi(argv[i]);
             port_num_found = true;
         } else if (arg == "-t" && !timeout_found) {
-            if (argc < i + 2) fatal("Not enough parameters provided");
+            if (argc < i + 2) 
+                fatal("Not enough parameters provided");
             check_timeout_value(argv[++i]);
             *timeout = atoi(argv[i]);
             timeout_found = true;
@@ -549,9 +563,10 @@ int main(int argc, char *argv[]) {
     do {
         read_length = read_message(socket_fd, &client_address, shared_buffer, sizeof(shared_buffer)); 
         char* client_ip = inet_ntoa(client_address.sin_addr); 
-        uint16_t client_port = ntohs(client_address.sin_port); printf("received %zd bytes from"
-        "client %s:%u: '%.*s'\n", read_length, client_ip, client_port,
-               (int) read_length, shared_buffer); // note: we specify the length of the printed string
+        uint16_t client_port = ntohs(client_address.sin_port); 
+        // printf("received %zd bytes from"
+        // "client %s:%u: '%.*s'\n", read_length, client_ip, client_port,
+            //    (int) read_length, shared_buffer); // note: we specify the length of the printed string
 
         if (message_is_get_events(read_length)) {
             send_events(socket_fd, &client_address, events, reservations);
