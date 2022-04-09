@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <stdarg.h>
 
 #include <fstream>
 #include <iostream>
@@ -15,13 +16,63 @@
 #include <random>
 #include <queue>
 
-#include "err.hpp"
+// Evaluate `x`: if non-zero, describe it as a standard error code and exit with an error.
+#define CHECK(x)                                                          \
+    do {                                                                  \
+        int err = (x);                                                    \
+        if (err != 0) {                                                   \
+            fprintf(stderr, "Error: %s returned %d in %s at %s:%d\n%s\n", \
+                #x, err, __func__, __FILE__, __LINE__, strerror(err));    \
+            exit(EXIT_FAILURE);                                           \
+        }                                                                 \
+    } while (0)
+
+// Evaluate `x`: if false, print an error message and exit with an error.
+#define ENSURE(x)                                                         \
+    do {                                                                  \
+        bool result = (x);                                                \
+        if (!result) {                                                    \
+            fprintf(stderr, "Error: %s was false in %s at %s:%d\n",       \
+                #x, __func__, __FILE__, __LINE__);                        \
+            exit(EXIT_FAILURE);                                           \
+        }                                                                 \
+    } while (0)
+
+// Check if errno is non-zero, and if so, print an error message and exit with an error.
+#define PRINT_ERRNO()                                                  \
+    do {                                                               \
+        if (errno != 0) {                                              \
+            fprintf(stderr, "Error: errno %d in %s at %s:%d\n%s\n",    \
+              errno, __func__, __FILE__, __LINE__, strerror(errno));   \
+            exit(EXIT_FAILURE);                                        \
+        }                                                              \
+    } while (0)
+
+
+// Set `errno` to 0 and evaluate `x`. If `errno` changed, describe it and exit.
+#define CHECK_ERRNO(x)                                                             \
+    do {                                                                           \
+        errno = 0;                                                                 \
+        (void) (x);                                                                \
+        PRINT_ERRNO();                                                             \
+    } while (0)
+
+// Print an error message and exit with an error.
+void fatal(const char *fmt, ...) {
+    va_list fmt_args;
+
+    fprintf(stderr, "Error: ");
+    va_start(fmt_args, fmt);
+    vfprintf(stderr, fmt, fmt_args);
+    va_end(fmt_args);
+    fprintf(stderr, "\n");
+    exit(EXIT_FAILURE);
+}
 
 #define BUFFER_SIZE 80
 #define MAX_UDP_DATAGRAM_SIZE 65507
 #define MAX_PORT_NUM 65535
 #define MAX_TIMEOUT_VALUE 86400
-#define MAX_MESSAGE_LENGTH 65435
 #define COOKIE_LENGTH 48
 #define MAX_BYTE_VALUE 255
 #define BAD_REQUEST 255
@@ -59,8 +110,6 @@ typedef struct ticketNumberStruct TicketNumber;
 struct ticketNumberStruct {
     char values[7];
 };
-
-
 
 /*
  * Key: event_id in little endian
@@ -111,7 +160,7 @@ bool tickets_expired(reservationsMap &reservations) {
 }
 
 bool cookies_match(std::string real_cookie) {
-    for (int i = 0; i < real_cookie.length(); ++i) {
+    for (size_t i = 0; i < real_cookie.length(); ++i) {
         if (real_cookie[i] != shared_buffer[i + 5]) {
             return false;
         }
@@ -190,8 +239,8 @@ bool reservation_arguments_are_correct(eventsMap &events, reservationsMap &reser
     uint16_t potential_ticket_count = 0;
     
     potential_ticket_count += (uint16_t)(((uint16_t) shared_buffer[5]) * (MAX_BYTE_VALUE + 1)) + (uint16_t((shared_buffer[6] + MAX_BYTE_VALUE + 1) % (MAX_BYTE_VALUE + 1)));
-    if (potential_event_id == 1)
-        printf("event_id = %d, chce kupic %d biletow a jest dostepne %d\n",potential_event_id,  potential_ticket_count, events[potential_event_id].tickets_available);
+    // if (potential_event_id == 1)
+    //     printf("event_id = %d, chce kupic %d biletow a jest dostepne %d\n",potential_event_id,  potential_ticket_count, events[potential_event_id].tickets_available);
     if (potential_ticket_count <= 0 || events[potential_event_id].tickets_available < potential_ticket_count) {
         return false;
     } 
@@ -318,8 +367,7 @@ reservation create_reservation(uint16_t timeout, eventsMap &events, reservations
     result.tickets_received = false;
   
     events[result.event_id].tickets_available -= result.ticket_count;
-    if (result.event_id == 1)
-        printf("^^^^^^^^^^^^^^^^^^^^^ teraz biletow na event_id == 1 jest %d,,,,,,,,,,,,,,,,,,\n", events[result.event_id].tickets_available);
+
     for (int i = 0; i < result.ticket_count; ++i) {
         std::string ticket = generate_ticket(ticketNumber);
         result.tickets.push_back(ticket);
@@ -355,10 +403,7 @@ void send_tickets(int socket_fd, const struct sockaddr_in *client_address, reser
         current_index += ticket.size();
     }
     tickets_message.resize(current_index);
-    if (reservations[reservation_id].event_id == 1) {
-        printf("wysylam %d biletow na event_d = %d\n", reservations[reservation_id].ticket_count, reservations[reservation_id].event_id);
-        // printf("^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ czy odebrano bilety na event_id = 1? %d",reservations)
-    }
+
     reservations[reservation_id].tickets_received = true;
     
     // printf("----------wydaje %d biletow na %d\n", reservations[reservation_id].ticket_count, reservation_id);
@@ -520,7 +565,7 @@ eventsMap read_events(char *filename) {
     fp = fopen(filename, "r");
     std::ifstream file(filename);
     eventsMap events;
-    uint32_t event_num = 0;
+
     uint32_t event_num_iter = 0;
     if (file.is_open()) {
         std::string line;
@@ -530,11 +575,9 @@ eventsMap read_events(char *filename) {
             uint16_t tickets_available = stoi(line);
             // tickets_available = htons(tickets_available);
             char description_length = static_cast<char>(description.length());
-            // event_num = htonl(event_num_iter);
-            events[event_num_iter] = Event({event_num_iter, description_length, description, tickets_available});
-            // events.push_back(event({event_num, description_length, description, tickets_available}));
-            if (event_num_iter == 1)
-                printf("------------------ na event_id = 1 jest poczatkowo %d biletow", tickets_available);
+            std::queue<reservation> empty_reservations;
+            events[event_num_iter] = Event({event_num_iter, description_length, description, tickets_available, empty_reservations});
+
 
 
             event_num_iter++;
@@ -584,7 +627,6 @@ int main(int argc, char *argv[]) {
         if (message_is_get_events(read_length)) {
             send_events(socket_fd, &client_address, events, reservations);
         } else if (message_is_get_reservation(read_length)) {
-            uint32_t event_id = calc_id();
             if (reservation_arguments_are_correct(events, reservations))
                 send_reservation(socket_fd, &client_address, events, reservations, timeout, ticketNumber);
             else 
