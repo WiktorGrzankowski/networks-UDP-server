@@ -93,7 +93,7 @@ struct reservationStruct {
     uint32_t event_id; // little endian
     uint16_t ticket_count; // litlle endian
     std::string cookie; // 48 bytes
-    uint64_t expiration_time;
+    uint64_t expiration_time; // little endian
     std::vector<std::string> tickets;
     bool tickets_received;
 };
@@ -161,9 +161,8 @@ bool tickets_expired(ReservationsMap &reservations) {
 // is the same as cookie of a given reservation.
 bool cookies_match(std::string real_cookie) {
     for (size_t i = 0; i < real_cookie.length(); ++i) {
-        if (real_cookie[i] != shared_buffer[i + 5]) {
+        if (real_cookie[i] != shared_buffer[i + 5]) 
             return false;
-        }
     }
     return true;
 }
@@ -224,10 +223,9 @@ uint16_t read_port(char *string) {
     errno = 0;
     unsigned long port = strtoul(string, NULL, 10);
     PRINT_ERRNO();
-    if (port > UINT16_MAX) {
+    if (port > UINT16_MAX) 
         fatal("%ul is not a valid port number", port);
-    }
-
+    
     return (uint16_t)port;
 }
 
@@ -357,7 +355,7 @@ void send_tickets(int socket_fd, const struct sockaddr_in *client_address, Reser
     
     ssize_t sent_length = sendto(socket_fd, tickets_message.c_str(), current_index, flags, (struct sockaddr *)client_address, address_length);
     ENSURE(sent_length == (ssize_t)tickets_message.length());
-    printf("[SEND TICKETS] Tickets sent successfully.\n");
+    printf("[SEND TICKETS]     Tickets for reservation nr %d sent successfully.\n", reservation_id);
 }
 
 // Sends a datagram with reservation info. Called only when it is ensured that 
@@ -398,7 +396,7 @@ void send_reservation(int socket_fd, const struct sockaddr_in *client_address,  
 
     ssize_t sent_length = sendto(socket_fd, reservation_message.c_str(), current_index, flags, (struct sockaddr *)client_address, address_length);
     ENSURE(sent_length == (ssize_t)reservation_message.length());
-    printf("[SEND RESERVATION] Reservation info sent successfully.\n");
+    printf("[SEND RESERVATION] Reservation nr %d for event nr %d sent successfully.\n", to_be_sent.reservation_id, to_be_sent.event_id);
 }
 
 // Sends a datagram with info about all events.
@@ -435,7 +433,7 @@ void send_events(int socket_fd, const struct sockaddr_in *client_address,  Event
     events_message.resize(current_index);
     ssize_t sent_length = sendto(socket_fd, events_message.c_str(), current_index, flags, (struct sockaddr *)client_address, address_length);
     ENSURE(sent_length == (ssize_t)events_message.length());
-    printf("[SEND EVENTS] Events info sent successfully.\n");
+    printf("[SEND EVENTS]      Events info sent successfully.\n");
 }
 
 void send_bad_reservation_request(int socket_fd, const struct sockaddr_in *client_address) {
@@ -448,7 +446,7 @@ void send_bad_reservation_request(int socket_fd, const struct sockaddr_in *clien
     size_t length = 5;
     ssize_t sent_length = sendto(socket_fd, message.c_str(), length, flags, (struct sockaddr *)client_address, address_length);
     ENSURE(sent_length == (ssize_t)length);
-    printf("[SEND RESERVATION] Bad request.\n");
+    printf("[SEND RESERVATION] Bad request for reservation nr %d.\n", calc_id());
 }
 
 void send_bad_tickets_request(int socket_fd, const struct sockaddr_in *client_address) {
@@ -461,7 +459,7 @@ void send_bad_tickets_request(int socket_fd, const struct sockaddr_in *client_ad
     size_t length = 5;
     ssize_t sent_length = sendto(socket_fd, message.c_str(), length, flags, (struct sockaddr *)client_address, address_length);
     ENSURE(sent_length == (ssize_t)length);
-    printf("[SEND TICKETS] Bad request.\n");
+    printf("[SEND TICKETS]     Bad request.\n");
 }
 
 void check_port_num(char *port_c) {
