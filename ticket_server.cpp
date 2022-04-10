@@ -169,6 +169,8 @@ using EventsMap = std::map<uint32_t, Event>;
 */
 using ReservationsMap = std::map<uint32_t, Reservation>;
 
+using MessageInfo = std::pair<std::string, uint32_t>;
+
 // Global generator, one for the entire server.
 TicketGenerator ticketGenerator;
 
@@ -354,16 +356,9 @@ Reservation create_reservation(uint16_t timeout, EventsMap &events,
     return result;
 }
 
-// Sends a datagram with tickets from a given reservation. Called only when it is ensured that
-// such reservation exists and time to receive tickets hasn't expired.
-void send_tickets(int socket_fd, const struct sockaddr_in *client_address,
-                  ReservationsMap &reservations) {
-    socklen_t address_length = (socklen_t) sizeof(*client_address);
-    int flags = 0;
-    uint32_t reservation_id = calc_id();
+MessageInfo make_tickets_message(ReservationsMap &reservations, uint32_t reservation_id) {
     std::string tickets_message(MAX_UDP_DATAGRAM_SIZE, '\0');
     uint32_t current_index = 1;
-
     tickets_message[0] = char(6);
 
     uint32_t reservation_id_copy = htonl(reservation_id); // in big endian
@@ -385,24 +380,28 @@ void send_tickets(int socket_fd, const struct sockaddr_in *client_address,
     tickets_message.resize(current_index);
 
     reservations[reservation_id].tickets_received = true;
+    return {tickets_message, current_index};
+}
 
-    ssize_t sent_length = sendto(socket_fd, tickets_message.c_str(),
-                                 current_index,
+// Sends a datagram with tickets from a given reservation. Called only when it is ensured that
+// such reservation exists and time to receive tickets hasn't expired.
+void send_tickets(int socket_fd, const struct sockaddr_in *client_address,
+                  ReservationsMap &reservations) {
+    socklen_t address_length = (socklen_t) sizeof(*client_address);
+    int flags = 0;
+    uint32_t reservation_id = calc_id();
+    MessageInfo message_info = make_tickets_message(reservations, reservation_id);
+
+    ssize_t sent_length = sendto(socket_fd, message_info.first.c_str(),
+                                 message_info.second,
                                  flags, (struct sockaddr *) client_address,
                                  address_length);
-    ENSURE(sent_length == (ssize_t) tickets_message.length());
+    ENSURE(sent_length == (ssize_t) message_info.first.length());
     std::cout << "[SEND TICKETS]     Tickets for reservation nr " << reservation_id << " sent successfully.\n";
 }
 
-// Sends a datagram with reservation info. Called only when it is ensured that
-// such a reservation is possible to make.
-void send_reservation(int socket_fd, const struct sockaddr_in *client_address,
-                      EventsMap &events,
-                      ReservationsMap &reservations, uint16_t timeout) {
-    socklen_t address_length = (socklen_t) sizeof(*client_address);
-    int flags = 0;
 
-    Reservation to_be_sent = create_reservation(timeout, events, reservations);
+MessageInfo make_reservation_message(ReservationsMap &reservations, Reservation &to_be_sent) {
     reservations[to_be_sent.reservation_id] = to_be_sent;
 
     uint32_t current_index = 1;
@@ -436,21 +435,30 @@ void send_reservation(int socket_fd, const struct sockaddr_in *client_address,
 
     reservation_message.resize(current_index);
 
-    ssize_t sent_length = sendto(socket_fd, reservation_message.c_str(),
-                                 current_index, flags,
+    return {reservation_message, current_index};
+}
+
+// Sends a datagram with reservation info. Called only when it is ensured that
+// such a reservation is possible to make.
+void send_reservation(int socket_fd, const struct sockaddr_in *client_address,
+                      EventsMap &events,
+                      ReservationsMap &reservations, uint16_t timeout) {
+    socklen_t address_length = (socklen_t) sizeof(*client_address);
+    int flags = 0;
+
+    Reservation to_be_sent = create_reservation(timeout, events, reservations);
+    MessageInfo message_info = make_reservation_message(reservations, to_be_sent);
+
+    ssize_t sent_length = sendto(socket_fd, message_info.first.c_str(),
+                                 message_info.second, flags,
                                  (struct sockaddr *) client_address,
                                  address_length);
-    ENSURE(sent_length == (ssize_t) reservation_message.length());
+    ENSURE(sent_length == (ssize_t) message_info.first.length());
     std::cout << "[SEND RESERVATION] Reservation nr " << to_be_sent.reservation_id << 
             " for event nr " << to_be_sent.event_id << " sent successfully.\n";
 }
 
-// Sends a datagram with info about all events.
-void send_events(int socket_fd, const struct sockaddr_in *client_address,
-                 EventsMap &events, ReservationsMap &reservations) {
-    socklen_t address_length = (socklen_t) sizeof(*client_address);
-    int flags = 0;
-
+MessageInfo make_events_message(ReservationsMap &reservations, EventsMap &events) {
     uint32_t current_index = 1;
     std::string events_message(MAX_UDP_DATAGRAM_SIZE, '\0');
     events_message[0] = char(2);
@@ -483,11 +491,21 @@ void send_events(int socket_fd, const struct sockaddr_in *client_address,
         current_index += ev.second.description.size();
     }
     events_message.resize(current_index);
-    ssize_t sent_length = sendto(socket_fd, events_message.c_str(),
-                                 current_index, flags,
+    return {events_message, current_index};
+}
+
+
+// Sends a datagram with info about all events.
+void send_events(int socket_fd, const struct sockaddr_in *client_address,
+                 EventsMap &events, ReservationsMap &reservations) {
+    socklen_t address_length = (socklen_t) sizeof(*client_address);
+    int flags = 0;
+    MessageInfo message_info = make_events_message(reservations, events);
+    ssize_t sent_length = sendto(socket_fd, message_info.first.c_str(),
+                                 message_info.second, flags,
                                  (struct sockaddr *) client_address,
                                  address_length);
-    ENSURE(sent_length == (ssize_t) events_message.length());
+    ENSURE(sent_length == (ssize_t) message_info.first.length());
     std::cout << "[SEND EVENTS]      Events info sent successfully. \n";
 }
 
@@ -659,7 +677,7 @@ int main(int argc, char *argv[]) {
                     send_tickets(socket_fd, &client_address, reservations);
                 }
             else {
-                notify_for_bad_request("[GET TICKETS]      ", port));
+                notify_for_bad_request("[GET TICKETS]      ", port);
                 send_bad_tickets_request(socket_fd, &client_address);
             }
         } else {
