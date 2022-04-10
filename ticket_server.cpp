@@ -73,6 +73,68 @@ void fatal(const char *fmt, ...) {
 
 char shared_buffer[BUFFER_SIZE];
 
+class Cookie {
+private:
+    std::string value;
+
+public:
+    Cookie() {
+        static const int range_from = 33;
+        static const int range_to = 126;
+        static std::random_device rand_dev;
+        static std::mt19937 generator(rand_dev());
+        static std::uniform_int_distribution<int> distr(range_from, range_to);
+        std::string cookie(COOKIE_LENGTH, '\0');
+        for (int i = 0; i < COOKIE_LENGTH; ++i)
+            cookie[i] = char(distr(generator));
+
+        value = cookie;
+    }
+
+    Cookie(char *buffer) {
+        std::string cookie(COOKIE_LENGTH, '\0');
+        for (int i = 0; i < COOKIE_LENGTH; ++i) {
+            cookie[i] = buffer[i + 5];
+        }
+        value = cookie;
+    }
+
+    std::string get_value() {
+        return value;
+    }
+
+    bool operator==(const Cookie &other) const {
+        return value.compare(other.value) == 0;
+    }
+};
+
+class TicketGenerator {
+private: 
+    char last_ticket[TICKET_LENGTH];
+
+public:
+    TicketGenerator() {
+        for (int i = 0; i < TICKET_LENGTH; ++i)
+            last_ticket[i] = '0';
+    }
+
+    std::string generate_next_ticket() {
+        for (int i = 0; i < TICKET_LENGTH; ++i) {
+            if (last_ticket[i] == 'Z') {
+                last_ticket[i] = '0';
+            } else if (last_ticket[i] == '9') {
+                last_ticket[i] = 'A';
+                break;
+            } else {
+                last_ticket[i]++;
+                break;
+            }
+        }
+        return std::string(last_ticket);
+    }
+};
+
+
 typedef struct reservationStruct Reservation;
 
 typedef struct eventStruct Event;
@@ -81,7 +143,7 @@ struct reservationStruct {
     uint32_t reservation_id; // little endian
     uint32_t event_id; // little endian
     uint16_t ticket_count; // litlle endian
-    std::string cookie; // 48 bytes
+    Cookie cookie; // 48 bytes
     uint64_t expiration_time; // little endian
     std::vector<std::string> tickets;
     bool tickets_received;
@@ -106,6 +168,9 @@ using EventsMap = std::map<uint32_t, Event>;
  * Value: reservation struct
 */
 using ReservationsMap = std::map<uint32_t, Reservation>;
+
+// Global generator, one for the entire server.
+TicketGenerator ticketGenerator;
 
 // Calculate event or reservation id from message stored in shared_buffer.
 uint32_t calc_id() {
@@ -151,16 +216,6 @@ bool tickets_expired(ReservationsMap &reservations) {
     return false;
 }
 
-// Check whether cookie from message stored in shared_buffer
-// is the same as cookie of a given reservation.
-bool cookies_match(std::string real_cookie) {
-    for (size_t i = 0; i < real_cookie.length(); ++i) {
-        if (real_cookie[i] != shared_buffer[i + 5])
-            return false;
-    }
-    return true;
-}
-
 // Check reservations for a given event starting from the oldest one
 // and update event info if time to receive tickets expired.
 void update_reservations_for_event(EventsMap &events, uint32_t event_id,
@@ -185,9 +240,7 @@ bool tickets_arguments_are_correct(ReservationsMap &reservations) {
 
     return potential_reservation_id >= MIN_RESERVATION_ID &&
            reservations.find(potential_reservation_id) != reservations.end() &&
-           cookies_match(reservations[potential_reservation_id].cookie) &&
-           (MAX_UDP_DATAGRAM_SIZE - 7) >
-           TICKET_LENGTH * reservations[potential_reservation_id].ticket_count;
+            reservations[potential_reservation_id].cookie == Cookie({shared_buffer});
 }
 
 bool reservation_arguments_are_correct(EventsMap &events,
@@ -208,25 +261,12 @@ bool reservation_arguments_are_correct(EventsMap &events,
            && potential_ticket_count <= MAX_TICKETS_PER_RESERVATION;
 }
 
-std::string generate_cookie() {
-    static const int range_from = 33;
-    static const int range_to = 126;
-    static std::random_device rand_dev;
-    static std::mt19937 generator(rand_dev());
-    static std::uniform_int_distribution<int> distr(range_from, range_to);
-    std::string cookie(COOKIE_LENGTH, '\0');
-    for (int i = 0; i < COOKIE_LENGTH; ++i)
-        cookie[i] = char(distr(generator));
-
-    return cookie;
-}
-
 int bind_socket(uint16_t port) {
     int socket_fd = socket(AF_INET, SOCK_DGRAM, 0);  // creating IPv4 UDP socket
     ENSURE(socket_fd > 0);
     // after socket() call; we should close(sock) on any execution path;
 
-    struct sockaddr_in server_address;
+    sockaddr_in server_address;
     server_address.sin_family = AF_INET;  // IPv4
     server_address.sin_addr.s_addr =
             htonl(INADDR_ANY);  // listening on all interfaces
@@ -296,22 +336,21 @@ std::string generate_ticket(char *nextTicketNumber) {
 Reservation create_reservation(uint16_t timeout, EventsMap &events,
                                ReservationsMap &reservations,
                                char *nextTicketNumber) {
-    Reservation result;
-    result.cookie = generate_cookie();
-    result.event_id = calc_id();
-    result.ticket_count = calc_ticket_count();
-    result.reservation_id = MIN_RESERVATION_ID + reservations.size();
-    result.expiration_time = time(0) + timeout;
-    result.tickets_received = false;
+    Cookie next_cookie;
+    uint32_t event_id = calc_id();
+    uint16_t ticket_count = calc_ticket_count();
+    uint32_t reservation_id = MIN_RESERVATION_ID + reservations.size();
+    uint64_t expiration_time = time(nullptr) + timeout;
+    events[event_id].tickets_available -= ticket_count;
 
-    events[result.event_id].tickets_available -= result.ticket_count;
-
-    for (int i = 0; i < result.ticket_count; ++i) {
-        std::string ticket = generate_ticket(nextTicketNumber);
-        result.tickets.push_back(ticket);
+    std::vector<std::string> tickets;
+    for (int i = 0; i < ticket_count; ++i) {
+        std::string ticket = ticketGenerator.generate_next_ticket();
+        tickets.push_back(ticket);
     }
 
-    events[result.event_id].unreceived_reservations.push(result);
+    Reservation result = Reservation({reservation_id, event_id, ticket_count, next_cookie, expiration_time, tickets, false});
+    events[event_id].unreceived_reservations.push(result);
 
     return result;
 }
@@ -390,8 +429,8 @@ void send_reservation(int socket_fd, const struct sockaddr_in *client_address,
            sizeof(tickets_count_copy));
     current_index += sizeof(tickets_count_copy); // tickets count is sent in big endian
 
-    strcpy(&reservation_message[current_index], to_be_sent.cookie.c_str());
-    current_index += to_be_sent.cookie.size();
+    strcpy(&reservation_message[current_index], to_be_sent.cookie.get_value().c_str());
+    current_index += to_be_sent.cookie.get_value().size();
 
     uint64_t expiration_time_copy = htobe64(
             to_be_sent.expiration_time); // send in big endian
@@ -597,7 +636,7 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < TICKET_LENGTH; ++i)
         nextTicketNumber[i] = '0';
 
-    struct sockaddr_in client_address;
+    sockaddr_in client_address;
     size_t read_length;
     do {
         read_length = read_message(socket_fd, &client_address, shared_buffer,
