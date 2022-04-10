@@ -295,46 +295,6 @@ size_t read_message(int socket_fd, struct sockaddr_in *client_address,
     return (size_t) len;
 }
 
-// Function generates unique tickets.
-// Before running out of combinations to create a unique ticket
-// all possible combinations will be used earlier.
-std::string generate_ticket(char *nextTicketNumber) {
-    std::string ticket(TICKET_LENGTH, '\0');
-    int finished_changes = 0;
-    if (nextTicketNumber[finished_changes] < '9') {
-        // still more digits to increment
-        nextTicketNumber[finished_changes]++;
-    } else if (nextTicketNumber[finished_changes] == '9') {
-        // last digit, change to first letter
-        nextTicketNumber[finished_changes] = 'A';
-    } else if (nextTicketNumber[finished_changes] < 'Z') {
-        // still more letters to increment
-        nextTicketNumber[finished_changes]++;
-    } else if (nextTicketNumber[finished_changes] == 'Z') {
-        // last letter
-        while (finished_changes < TICKET_LENGTH - 1 &&
-               nextTicketNumber[finished_changes] == 'Z') {
-            nextTicketNumber[finished_changes] = '0';
-            if (nextTicketNumber[finished_changes + 1] != 'Z') {
-                if (nextTicketNumber[finished_changes + 1] == '9') {
-                    nextTicketNumber[finished_changes + 1] = 'A';
-                } else {
-                    nextTicketNumber[finished_changes + 1]++;
-                }
-                break;
-            } else {
-                finished_changes++;
-            }
-        }
-    }
-
-    for (int i = 0; i < TICKET_LENGTH; ++i)
-        ticket[i] = nextTicketNumber[i];
-
-    return ticket;
-
-}
-
 Reservation create_reservation(uint16_t timeout, EventsMap &events,
                                ReservationsMap &reservations) {
     Cookie next_cookie;
@@ -617,7 +577,6 @@ void read_input(int argc, char *argv[], uint16_t *port_num, uint16_t *timeout,
     }
     notify_for_correct_server_parameters(*port_num, *timeout, *filename);
 }
-
 
 EventsMap read_events(char *filename) {
     std::ifstream file(filename);
