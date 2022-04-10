@@ -121,10 +121,12 @@ uint32_t calc_id() {
 }
 
 // Calculate ticket count from message stored in shared_buffer.
+// MAX_BYTE_VALUE + 1 (256) is added to both numbers to avoid
+// negative numbers, since we want to read them as unsigned.
 uint16_t calc_ticket_count() {
-    return (uint16_t) (((uint16_t) shared_buffer[5]) * (MAX_BYTE_VALUE + 1)) +
-           (uint16_t((shared_buffer[6] + MAX_BYTE_VALUE + 1) %
-                     (MAX_BYTE_VALUE + 1)));
+    return (uint16_t) (((shared_buffer[5] + MAX_BYTE_VALUE + 1) % (MAX_BYTE_VALUE + 1)) * (MAX_BYTE_VALUE + 1)) +
+           ((shared_buffer[6] + MAX_BYTE_VALUE + 1) %
+                     (MAX_BYTE_VALUE + 1));
 }
 
 bool message_is_get_events(size_t read_length) {
@@ -165,12 +167,12 @@ void update_reservations_for_event(EventsMap &events, uint32_t event_id,
                                    ReservationsMap &reservations) {
     uint64_t current_time = time(0);
     while (events[event_id].unreceived_reservations.size() > 0) {
-        if (reservations[events[event_id].unreceived_reservations.front().reservation_id].tickets_received) {
+        Reservation oldest_reservation = events[event_id].unreceived_reservations.front();
+        if (reservations[oldest_reservation.reservation_id].tickets_received) {
             events[event_id].unreceived_reservations.pop();
         } else if (
-                events[event_id].unreceived_reservations.front().expiration_time <=
-                current_time) {
-            events[event_id].tickets_available += events[event_id].unreceived_reservations.front().ticket_count;
+               oldest_reservation.expiration_time <= current_time) {
+            events[event_id].tickets_available += oldest_reservation.ticket_count;
             events[event_id].unreceived_reservations.pop();
         } else {
             break;
@@ -207,26 +209,16 @@ bool reservation_arguments_are_correct(EventsMap &events,
 }
 
 std::string generate_cookie() {
-    const int range_from = 33;
-    const int range_to = 126;
-    std::random_device rand_dev;
-    std::mt19937 generator(rand_dev());
-    std::uniform_int_distribution<int> distr(range_from, range_to);
+    static const int range_from = 33;
+    static const int range_to = 126;
+    static std::random_device rand_dev;
+    static std::mt19937 generator(rand_dev());
+    static std::uniform_int_distribution<int> distr(range_from, range_to);
     std::string cookie(COOKIE_LENGTH, '\0');
     for (int i = 0; i < COOKIE_LENGTH; ++i)
         cookie[i] = char(distr(generator));
 
     return cookie;
-}
-
-uint16_t read_port(char *string) {
-    errno = 0;
-    unsigned long port = strtoul(string, NULL, 10);
-    PRINT_ERRNO();
-    if (port > UINT16_MAX)
-        fatal("%ul is not a valid port number", port);
-
-    return (uint16_t) port;
 }
 
 int bind_socket(uint16_t port) {
@@ -265,29 +257,25 @@ size_t read_message(int socket_fd, struct sockaddr_in *client_address,
 // Before running out of combinations to create a unique ticket
 // all possible combinations will be used earlier.
 std::string generate_ticket(char *nextTicketNumber) {
-    const int letters_from = 65;
-    const int letters_to = 90;
-    const int digits_from = 48;
-    const int digits_to = 57;
     std::string ticket(TICKET_LENGTH, '\0');
     int finished_changes = 0;
-    if (nextTicketNumber[finished_changes] < digits_to) {
+    if (nextTicketNumber[finished_changes] < '9') {
         // still more digits to increment
         nextTicketNumber[finished_changes]++;
-    } else if (nextTicketNumber[finished_changes] == digits_to) {
+    } else if (nextTicketNumber[finished_changes] == '9') {
         // last digit, change to first letter
-        nextTicketNumber[finished_changes] = letters_from;
-    } else if (nextTicketNumber[finished_changes] < letters_to) {
+        nextTicketNumber[finished_changes] = 'A';
+    } else if (nextTicketNumber[finished_changes] < 'Z') {
         // still more letters to increment
         nextTicketNumber[finished_changes]++;
-    } else if (nextTicketNumber[finished_changes] == letters_to) {
+    } else if (nextTicketNumber[finished_changes] == 'Z') {
         // last letter
         while (finished_changes < TICKET_LENGTH - 1 &&
-               nextTicketNumber[finished_changes] == letters_to) {
-            nextTicketNumber[finished_changes] = digits_from;
-            if (nextTicketNumber[finished_changes + 1] != letters_to) {
-                if (nextTicketNumber[finished_changes + 1] == digits_to) {
-                    nextTicketNumber[finished_changes + 1] = letters_from;
+               nextTicketNumber[finished_changes] == 'Z') {
+            nextTicketNumber[finished_changes] = '0';
+            if (nextTicketNumber[finished_changes + 1] != 'Z') {
+                if (nextTicketNumber[finished_changes + 1] == '9') {
+                    nextTicketNumber[finished_changes + 1] = 'A';
                 } else {
                     nextTicketNumber[finished_changes + 1]++;
                 }
@@ -328,7 +316,7 @@ Reservation create_reservation(uint16_t timeout, EventsMap &events,
     return result;
 }
 
-// Sends a datagram with tickets from a given reservation. Called only when it is ensured that 
+// Sends a datagram with tickets from a given reservation. Called only when it is ensured that
 // such reservation exists and time to receive tickets hasn't expired.
 void send_tickets(int socket_fd, const struct sockaddr_in *client_address,
                   ReservationsMap &reservations) {
@@ -369,7 +357,7 @@ void send_tickets(int socket_fd, const struct sockaddr_in *client_address,
            reservation_id);
 }
 
-// Sends a datagram with reservation info. Called only when it is ensured that 
+// Sends a datagram with reservation info. Called only when it is ensured that
 // such a reservation is possible to make.
 void send_reservation(int socket_fd, const struct sockaddr_in *client_address,
                       EventsMap &events,
@@ -501,6 +489,10 @@ void send_bad_tickets_request(int socket_fd,
     printf("[SEND TICKETS]     Bad request.\n");
 }
 
+void notify_for_pointless_message() {
+    printf("[UNKNOWN MESSAGE]  Message id not supported.\n");
+}
+
 void check_port_num(char *port_c) {
     std::string port_string = std::string(port_c);
     for (char &c : port_string) {
@@ -523,10 +515,22 @@ void check_timeout_value(char *timeout_c) {
         fatal("Wrong timeout value provided");
 }
 
+void notify_for_wrong_server_parameters(std::string reason) {
+    std::cout << "[SERVER USAGE]     " << reason << '\n';
+    fatal("[SERVER USAGE]     {argv[0]} -f <path to events file> [-p <port>] [-t <timeout>]\n");
+}
+
+void notify_for_correct_server_parameters(uint16_t port_num, uint16_t timeout, char *filename) {
+    std::cout << "[SERVER USAGE]     Server starting with file = " << filename << ", port = " 
+                << port_num << ", timeout = " << timeout << ". \n";
+}
+
+//Przy niepoprawnym uruchomieniu serwer powinien wypisywać komunikat zawierający informację o tym, jak wygląda jego prawidłowe uruchomienie, 
+//np. "Usage: {argv[0]} -f <path to events file> [-p <port>] [-t <timeout>]"
 void read_input(int argc, char *argv[], uint16_t *port_num, uint16_t *timeout,
                 char **filename) {
-    if (argc < 3)
-        fatal("Not enough arguments provided");
+    if (argc < 3) 
+        notify_for_wrong_server_parameters("Not enough arguments provided");
 
     bool filename_found = false, port_num_found = false, timeout_found = false;
     for (int i = 1; i < argc; ++i) {
@@ -534,31 +538,30 @@ void read_input(int argc, char *argv[], uint16_t *port_num, uint16_t *timeout,
 
         if (arg == "-f" && !filename_found) {
             *filename = argv[++i];
-            if (access(*filename, F_OK) != 0)
-                fatal("Wrong filename provided");
+            if (access(*filename, F_OK) != 0) 
+                notify_for_wrong_server_parameters("Wrong filename provided.");
             filename_found = true;
         } else if (arg == "-p" && !port_num_found) {
-            if (argc < i + 2)
-                fatal("Not enough parameters provided");
+            if (argc < i + 2) 
+                notify_for_wrong_server_parameters("Not enough parameters provided.");             
             check_port_num(argv[++i]);
             *port_num = atoi(argv[i]);
             port_num_found = true;
         } else if (arg == "-t" && !timeout_found) {
-            if (argc < i + 2)
-                fatal("Not enough parameters provided");
+            if (argc < i + 2) 
+                notify_for_wrong_server_parameters("Not enough parameters provided.");
             check_timeout_value(argv[++i]);
             *timeout = atoi(argv[i]);
             timeout_found = true;
         } else {
-            fatal("Wrong arguments provided");
+            notify_for_wrong_server_parameters("Wrong arguments provided.");
         }
     }
+    notify_for_correct_server_parameters(*port_num, *timeout, *filename);
 }
 
 
 EventsMap read_events(char *filename) {
-    FILE *fp;
-    fp = fopen(filename, "r");
     std::ifstream file(filename);
     EventsMap events;
     uint32_t event_num_iter = 0;
@@ -577,7 +580,6 @@ EventsMap read_events(char *filename) {
         }
         file.close();
     }
-    fclose(fp);
     return events;
 }
 
@@ -590,8 +592,6 @@ int main(int argc, char *argv[]) {
     ReservationsMap reservations;
     EventsMap events = read_events(filename);
 
-    printf("Listening on port %u\n", port);
-
     int socket_fd = bind_socket(port);
     char nextTicketNumber[7];
     for (int i = 0; i < TICKET_LENGTH; ++i)
@@ -602,8 +602,6 @@ int main(int argc, char *argv[]) {
     do {
         read_length = read_message(socket_fd, &client_address, shared_buffer,
                                    sizeof(shared_buffer));
-        char *client_ip = inet_ntoa(client_address.sin_addr);
-        uint16_t client_port = ntohs(client_address.sin_port);
 
         if (message_is_get_events(read_length)) {
             send_events(socket_fd, &client_address, events, reservations);
@@ -619,10 +617,12 @@ int main(int argc, char *argv[]) {
                 send_tickets(socket_fd, &client_address, reservations);
             else
                 send_bad_tickets_request(socket_fd, &client_address);
+        } else {
+            notify_for_pointless_message();
         }
 
     } while (read_length > 0);
-    printf("finished exchange\n");
+    std::cout << "[SERVER USAGE]     Finished exchange\n";
 
     CHECK_ERRNO(close(socket_fd));
 
