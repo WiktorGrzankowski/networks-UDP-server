@@ -334,8 +334,7 @@ std::string generate_ticket(char *nextTicketNumber) {
 }
 
 Reservation create_reservation(uint16_t timeout, EventsMap &events,
-                               ReservationsMap &reservations,
-                               char *nextTicketNumber) {
+                               ReservationsMap &reservations) {
     Cookie next_cookie;
     uint32_t event_id = calc_id();
     uint16_t ticket_count = calc_ticket_count();
@@ -392,21 +391,18 @@ void send_tickets(int socket_fd, const struct sockaddr_in *client_address,
                                  flags, (struct sockaddr *) client_address,
                                  address_length);
     ENSURE(sent_length == (ssize_t) tickets_message.length());
-    printf("[SEND TICKETS]     Tickets for reservation nr %d sent successfully.\n",
-           reservation_id);
+    std::cout << "[SEND TICKETS]     Tickets for reservation nr " << reservation_id << " sent successfully.\n";
 }
 
 // Sends a datagram with reservation info. Called only when it is ensured that
 // such a reservation is possible to make.
 void send_reservation(int socket_fd, const struct sockaddr_in *client_address,
                       EventsMap &events,
-                      ReservationsMap &reservations, uint16_t timeout,
-                      char *nextTicketNumber) {
+                      ReservationsMap &reservations, uint16_t timeout) {
     socklen_t address_length = (socklen_t) sizeof(*client_address);
     int flags = 0;
 
-    Reservation to_be_sent = create_reservation(timeout, events, reservations,
-                                                nextTicketNumber);
+    Reservation to_be_sent = create_reservation(timeout, events, reservations);
     reservations[to_be_sent.reservation_id] = to_be_sent;
 
     uint32_t current_index = 1;
@@ -445,8 +441,8 @@ void send_reservation(int socket_fd, const struct sockaddr_in *client_address,
                                  (struct sockaddr *) client_address,
                                  address_length);
     ENSURE(sent_length == (ssize_t) reservation_message.length());
-    printf("[SEND RESERVATION] Reservation nr %d for event nr %d sent successfully.\n",
-           to_be_sent.reservation_id, to_be_sent.event_id);
+    std::cout << "[SEND RESERVATION] Reservation nr " << to_be_sent.reservation_id << 
+            " for event nr " << to_be_sent.event_id << " sent successfully.\n";
 }
 
 // Sends a datagram with info about all events.
@@ -492,7 +488,7 @@ void send_events(int socket_fd, const struct sockaddr_in *client_address,
                                  (struct sockaddr *) client_address,
                                  address_length);
     ENSURE(sent_length == (ssize_t) events_message.length());
-    printf("[SEND EVENTS]      Events info sent successfully.\n");
+    std::cout << "[SEND EVENTS]      Events info sent successfully. \n";
 }
 
 void send_bad_reservation_request(int socket_fd,
@@ -508,8 +504,7 @@ void send_bad_reservation_request(int socket_fd,
                                  (struct sockaddr *) client_address,
                                  address_length);
     ENSURE(sent_length == (ssize_t) length);
-    printf("[SEND RESERVATION] Bad request for reservation nr %d.\n",
-           calc_id());
+    std::cout << "[SEND RESERVATION] Bad request for reservation nr " << calc_id() << ". \n";
 }
 
 void send_bad_tickets_request(int socket_fd,
@@ -525,11 +520,11 @@ void send_bad_tickets_request(int socket_fd,
                                  (struct sockaddr *) client_address,
                                  address_length);
     ENSURE(sent_length == (ssize_t) length);
-    printf("[SEND TICKETS]     Bad request.\n");
+    std::cout << "[SEND TICKETS]     Bad request.\n";
 }
 
-void notify_for_pointless_message() {
-    printf("[UNKNOWN MESSAGE]  Message id not supported.\n");
+void notify_for_pointless_message(uint16_t port_num) {
+    std::cout << "[UNKNOWN MESSAGE]  Not supported message received from port" << port_num <<  ". \n";
 }
 
 void check_port_num(char *port_c) {
@@ -555,8 +550,8 @@ void check_timeout_value(char *timeout_c) {
 }
 
 void notify_for_wrong_server_parameters(std::string reason) {
-    std::cout << "[SERVER USAGE]     " << reason << '\n';
-    fatal("[SERVER USAGE]     {argv[0]} -f <path to events file> [-p <port>] [-t <timeout>]\n");
+    std::cout << "[SERVER USAGE]     {argv[0]} -f <path to events file> [-p <port>] [-t <timeout>]\n";
+    fatal("[SERVER USAGE]     %s\n", reason.c_str());
 }
 
 void notify_for_correct_server_parameters(uint16_t port_num, uint16_t timeout, char *filename) {
@@ -564,8 +559,14 @@ void notify_for_correct_server_parameters(uint16_t port_num, uint16_t timeout, c
                 << port_num << ", timeout = " << timeout << ". \n";
 }
 
-//Przy niepoprawnym uruchomieniu serwer powinien wypisywać komunikat zawierający informację o tym, jak wygląda jego prawidłowe uruchomienie, 
-//np. "Usage: {argv[0]} -f <path to events file> [-p <port>] [-t <timeout>]"
+void notify_for_correct_message(std::string message, uint16_t port_num) {
+    std::cout << message << "Received correct message from port " << port_num << ". \n";
+}
+
+void notify_for_bad_request(std::string message, uint16_t port_num) {
+    std::cout << message << "Received bad request from port " << port_num << ". \n";
+}
+
 void read_input(int argc, char *argv[], uint16_t *port_num, uint16_t *timeout,
                 char **filename) {
     if (argc < 3) 
@@ -632,9 +633,6 @@ int main(int argc, char *argv[]) {
     EventsMap events = read_events(filename);
 
     int socket_fd = bind_socket(port);
-    char nextTicketNumber[7];
-    for (int i = 0; i < TICKET_LENGTH; ++i)
-        nextTicketNumber[i] = '0';
 
     sockaddr_in client_address;
     size_t read_length;
@@ -643,21 +641,29 @@ int main(int argc, char *argv[]) {
                                    sizeof(shared_buffer));
 
         if (message_is_get_events(read_length)) {
+            notify_for_correct_message("[GET EVENTS]       ", port);
             send_events(socket_fd, &client_address, events, reservations);
         } else if (message_is_get_reservation(read_length)) {
-            if (reservation_arguments_are_correct(events, reservations))
+            if (reservation_arguments_are_correct(events, reservations)) {
+                notify_for_correct_message("[GET RESERVATION]  ", port);
                 send_reservation(socket_fd, &client_address, events,
-                                 reservations, timeout, nextTicketNumber);
-            else
+                                 reservations, timeout);
+            } else {
+                notify_for_bad_request("[GET RESERVATION]  ", port);
                 send_bad_reservation_request(socket_fd, &client_address);
+            }
         } else if (message_is_get_tickets(read_length)) {
             if (tickets_arguments_are_correct(reservations) &&
-                !tickets_expired(reservations))
-                send_tickets(socket_fd, &client_address, reservations);
-            else
+                !tickets_expired(reservations)) {
+                    notify_for_correct_message("[GET TICKETS]      ", port);
+                    send_tickets(socket_fd, &client_address, reservations);
+                }
+            else {
+                notify_for_bad_request("[GET TICKETS]      ", port));
                 send_bad_tickets_request(socket_fd, &client_address);
+            }
         } else {
-            notify_for_pointless_message();
+            notify_for_pointless_message(port);
         }
 
     } while (read_length > 0);
