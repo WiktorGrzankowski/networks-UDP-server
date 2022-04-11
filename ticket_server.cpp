@@ -17,13 +17,17 @@
 #include <queue>
 
 #define BUFFER_SIZE 80
+#define SEND_EVENTS_ID 2
+#define SEND_RESERVATION_ID 4
+#define SEND_TICKETS_ID 6
+#define BAD_REQUEST 255
 #define MAX_UDP_DATAGRAM_SIZE 65507
 #define MAX_PORT_NUM 65535
 #define MIN_PORT_NUM 0
+#define MIN_TIMEOUT_VALUE 1
 #define MAX_TIMEOUT_VALUE 86400
 #define COOKIE_LENGTH 48
 #define MAX_BYTE_VALUE 255
-#define BAD_REQUEST 255
 #define MIN_RESERVATION_ID 1000000
 #define MAX_EVENT_ID 999999
 #define TICKET_LENGTH 7
@@ -133,7 +137,6 @@ public:
         return std::string(last_ticket);
     }
 };
-
 
 typedef struct reservationStruct Reservation;
 
@@ -316,26 +319,54 @@ Reservation create_reservation(uint16_t timeout, EventsMap &events,
     return result;
 }
 
+void append_id(std::string &message, uint32_t id, uint32_t &current_index) {
+    uint32_t reservation_id_copy = htonl(id); // in big endian
+    memcpy(&message[current_index], &reservation_id_copy,
+           sizeof(reservation_id_copy));
+    current_index += sizeof(reservation_id_copy);
+}
+
+void append_ticket_count(std::string &message, uint16_t tickets_count_b_end, uint32_t &current_index) {
+    memcpy(&message[current_index], &tickets_count_b_end,
+           sizeof(tickets_count_b_end));
+    current_index += sizeof(tickets_count_b_end); // tickets count is sent in big endian
+}
+
+void append_description(std::string &message, std::string &description, uint32_t &current_index) {
+    strcpy(&message[current_index], description.c_str());
+    current_index += description.size();
+}
+
+void append_description_length(std::string &message, char description_length, uint32_t &current_index) {
+    memcpy(&message[current_index], &description_length,
+           sizeof(description_length));
+    current_index += sizeof(description_length); // only one byte, so big endian as well
+}
+
+void append_cookie(std::string &message, Cookie cookie, uint32_t &current_index) {
+    strcpy(&message[current_index], cookie.get_value().c_str());
+    current_index += cookie.get_value().size();
+}
+
+void append_ticket(std::string &message, std::string ticket, uint32_t &current_index) {
+    strcpy(&message[current_index], ticket.c_str());
+    current_index += ticket.size();  
+}
+
+
 MessageInfo make_tickets_message(ReservationsMap &reservations, uint32_t reservation_id) {
     std::string tickets_message(MAX_UDP_DATAGRAM_SIZE, '\0');
     uint32_t current_index = 1;
-    tickets_message[0] = char(6);
+    tickets_message[0] = char(SEND_TICKETS_ID);
 
-    uint32_t reservation_id_copy = htonl(reservation_id); // in big endian
-    memcpy(&tickets_message[current_index], &reservation_id_copy,
-           sizeof(reservation_id_copy));
-    current_index += sizeof(reservation_id_copy);
+    append_id(tickets_message, reservation_id, current_index);
 
     uint16_t tickets_count_copy = htons(
             reservations[reservation_id].ticket_count);
-    memcpy(&tickets_message[current_index], &tickets_count_copy,
-           sizeof(tickets_count_copy));
-    current_index += sizeof(tickets_count_copy); // tickets count is sent in big endian
+    append_ticket_count(tickets_message, tickets_count_copy, current_index);
 
-    for (auto ticket : reservations[reservation_id].tickets) {
-        strcpy(&tickets_message[current_index], ticket.c_str());
-        current_index += ticket.size();
-    }
+    for (auto ticket : reservations[reservation_id].tickets) 
+        append_ticket(tickets_message, ticket, current_index);
 
     tickets_message.resize(current_index);
 
@@ -345,7 +376,7 @@ MessageInfo make_tickets_message(ReservationsMap &reservations, uint32_t reserva
 
 // Sends a datagram with tickets from a given reservation. Called only when it is ensured that
 // such reservation exists and time to receive tickets hasn't expired.
-void send_tickets(int socket_fd, const struct sockaddr_in *client_address,
+void send_tickets(int socket_fd, const sockaddr_in *client_address,
                   ReservationsMap &reservations) {
     socklen_t address_length = (socklen_t) sizeof(*client_address);
     int flags = 0;
@@ -360,32 +391,22 @@ void send_tickets(int socket_fd, const struct sockaddr_in *client_address,
     std::cout << "[SEND TICKETS]     Tickets for reservation nr " << reservation_id << " sent successfully.\n";
 }
 
-
 MessageInfo make_reservation_message(ReservationsMap &reservations, Reservation &to_be_sent) {
     reservations[to_be_sent.reservation_id] = to_be_sent;
 
     uint32_t current_index = 1;
     std::string reservation_message(MAX_UDP_DATAGRAM_SIZE, '\0');
 
-    reservation_message[0] = char(4);
+    reservation_message[0] = char(SEND_RESERVATION_ID);
 
-    uint32_t reservation_id_copy = htonl(to_be_sent.reservation_id);
-    memcpy(&reservation_message[current_index], &reservation_id_copy,
-           sizeof(reservation_id_copy));
-    current_index += sizeof(reservation_id_copy);
+    append_id(reservation_message, to_be_sent.reservation_id, current_index);
 
-    uint32_t event_id_copy = htonl(to_be_sent.event_id);
-    memcpy(&reservation_message[current_index], &event_id_copy,
-           sizeof(event_id_copy));
-    current_index += sizeof(event_id_copy); // send in big endian
+    append_id(reservation_message, to_be_sent.event_id, current_index);    
 
     uint16_t tickets_count_copy = htons(to_be_sent.ticket_count);
-    memcpy(&reservation_message[current_index], &tickets_count_copy,
-           sizeof(tickets_count_copy));
-    current_index += sizeof(tickets_count_copy); // tickets count is sent in big endian
+    append_ticket_count(reservation_message, tickets_count_copy, current_index);
 
-    strcpy(&reservation_message[current_index], to_be_sent.cookie.get_value().c_str());
-    current_index += to_be_sent.cookie.get_value().size();
+    append_cookie(reservation_message, to_be_sent.cookie, current_index);
 
     uint64_t expiration_time_copy = htobe64(
             to_be_sent.expiration_time); // send in big endian
@@ -400,7 +421,7 @@ MessageInfo make_reservation_message(ReservationsMap &reservations, Reservation 
 
 // Sends a datagram with reservation info. Called only when it is ensured that
 // such a reservation is possible to make.
-void send_reservation(int socket_fd, const struct sockaddr_in *client_address,
+void send_reservation(int socket_fd, const sockaddr_in *client_address,
                       EventsMap &events,
                       ReservationsMap &reservations, uint16_t timeout) {
     socklen_t address_length = (socklen_t) sizeof(*client_address);
@@ -418,37 +439,33 @@ void send_reservation(int socket_fd, const struct sockaddr_in *client_address,
             " for event nr " << to_be_sent.event_id << " sent successfully.\n";
 }
 
+uint32_t next_message_size(Event &event) {
+    return sizeof(event.event_id) + 
+            sizeof(event.tickets_available) + 
+            sizeof(event.description_length) + 
+            event.description_length;
+}
+
 MessageInfo make_events_message(ReservationsMap &reservations, EventsMap &events) {
     uint32_t current_index = 1;
     std::string events_message(MAX_UDP_DATAGRAM_SIZE, '\0');
-    events_message[0] = char(2);
+    events_message[0] = char(SEND_EVENTS_ID);
     for (auto ev : events) {
         update_reservations_for_event(events, ev.first, reservations);
         uint16_t tickets_count_copy = ev.second.tickets_available;
         tickets_count_copy = htons(tickets_count_copy); // send in big endian
 
-        if (current_index + sizeof(ev.second.event_id) +
-            sizeof(ev.second.tickets_available) +
-            sizeof(ev.second.description_length) +
-            sizeof(ev.second.description) > MAX_UDP_DATAGRAM_SIZE - 100)
+        if (current_index + next_message_size(ev.second) > MAX_UDP_DATAGRAM_SIZE)
             break;
 
-        uint32_t event_id_copy = ev.second.event_id;
-        event_id_copy = htonl(event_id_copy);
-        memcpy(&events_message[current_index], &event_id_copy,
-               sizeof(event_id_copy));
-        current_index += sizeof(event_id_copy); // send in big endian
+        append_id(events_message, ev.second.event_id, current_index);
 
-        memcpy(&events_message[current_index], &tickets_count_copy,
-               sizeof(tickets_count_copy));
-        current_index += sizeof(tickets_count_copy); // send in big endian
+        append_ticket_count(events_message, tickets_count_copy, current_index);
 
-        memcpy(&events_message[current_index], &ev.second.description_length,
-               sizeof(ev.second.description_length));
-        current_index += sizeof(ev.second.description_length); // only one byte, so big endian as well
+        append_description_length(events_message, ev.second.description_length, current_index);
 
-        strcpy(&events_message[current_index], ev.second.description.c_str());
-        current_index += ev.second.description.size();
+        append_description(events_message, ev.second.description, current_index);
+
     }
     events_message.resize(current_index);
     return {events_message, current_index};
@@ -456,7 +473,7 @@ MessageInfo make_events_message(ReservationsMap &reservations, EventsMap &events
 
 
 // Sends a datagram with info about all events.
-void send_events(int socket_fd, const struct sockaddr_in *client_address,
+void send_events(int socket_fd, const sockaddr_in *client_address,
                  EventsMap &events, ReservationsMap &reservations) {
     socklen_t address_length = (socklen_t) sizeof(*client_address);
     int flags = 0;
@@ -523,7 +540,7 @@ void check_timeout_value(char *timeout_c) {
             fatal("Wrong timeout value provided");
     }
     int value = atoi(timeout_c);
-    if (value < 1 || value > MAX_TIMEOUT_VALUE)
+    if (value < MIN_TIMEOUT_VALUE || value > MAX_TIMEOUT_VALUE)
         fatal("Wrong timeout value provided");
 }
 
