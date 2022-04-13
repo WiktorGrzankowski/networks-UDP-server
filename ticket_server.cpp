@@ -144,7 +144,7 @@ typedef struct eventStruct Event;
 struct reservationStruct {
     uint32_t reservation_id; // little endian
     uint32_t event_id; // little endian
-    uint16_t ticket_count; // litle endian
+    uint16_t ticket_count; // little endian
     Cookie cookie; // 48 bytes
     uint64_t expiration_time; // little endian
     std::vector<std::string> tickets;
@@ -155,20 +155,18 @@ struct eventStruct {
     uint32_t event_id; // little endian
     char description_length;
     std::string description;
-    uint16_t tickets_available; // litle endian
+    uint16_t tickets_available; // little endian
     std::queue<Reservation> unreceived_reservations;
 };
 
-/*
- * Key: event_id in little endian
- * Value: event struct
-*/
+
+// Key: event_id in little endian
+// Value: event struct
 using EventsMap = std::map<uint32_t, Event>;
 
-/*
- * Key: reservation_id in little endian
- * Value: reservation struct
-*/
+
+// Key: reservation_id in little endian
+// Value: reservation struct
 using ReservationsMap = std::map<uint32_t, Reservation>;
 
 using MessageInfo = std::pair<std::string, uint32_t>;
@@ -227,14 +225,16 @@ bool tickets_expired(ReservationsMap &reservations) {
 // and update event info if time to receive tickets expired.
 void update_reservations_for_event(EventsMap &events, uint32_t event_id,
                                    ReservationsMap &reservations) {
-    uint64_t current_time = time(0);
+    uint64_t current_time = time(nullptr);
     while (!events[event_id].unreceived_reservations.empty()) {
-        Reservation oldest_reservation = events[event_id].unreceived_reservations.front();
+        Reservation oldest_reservation = events[event_id].
+                                                unreceived_reservations.front();
         if (reservations[oldest_reservation.reservation_id].tickets_received) {
             events[event_id].unreceived_reservations.pop();
         } else if (
                 oldest_reservation.expiration_time <= current_time) {
-            events[event_id].tickets_available += oldest_reservation.ticket_count;
+            events[event_id].tickets_available += oldest_reservation.
+                                                                ticket_count;
             events[event_id].unreceived_reservations.pop();
         } else {
             break;
@@ -336,7 +336,7 @@ void append_ticket_count(std::string &message,
                          uint32_t &current_index) {
     memcpy(&message[current_index], &tickets_count_big_endian,
            sizeof(tickets_count_big_endian));
-    current_index += sizeof(tickets_count_big_endian); // tickets count is sent in big endian
+    current_index += sizeof(tickets_count_big_endian);
 }
 
 void append_description(std::string &message, std::string &description,
@@ -386,8 +386,9 @@ MessageInfo make_tickets_message(ReservationsMap &reservations,
     return {tickets_message, current_index};
 }
 
-// Sends a datagram with tickets from a given reservation. Called only when it is ensured that
-// such reservation exists and time to receive tickets hasn't expired.
+// Sends a datagram with tickets from a given reservation.
+// Called only when it is ensured that such reservation exists
+// and time to receive tickets hasn't expired.
 void send_tickets(int socket_fd, const sockaddr_in *client_address,
                   ReservationsMap &reservations) {
     socklen_t address_length = (socklen_t) sizeof(*client_address);
@@ -569,8 +570,8 @@ void check_timeout_value(char *timeout_c) {
 }
 
 void notify_for_wrong_server_parameters(std::string reason) {
-    std::cout
-            << "[SERVER USAGE]     {argv[0]} -f <path to events file> [-p <port>] [-t <timeout>]\n";
+    std::cout << "[SERVER USAGE]     argv[0] -f <path to events file> "
+                 "[-p <port>] [-t <timeout>]\n";
     fatal("[SERVER USAGE]     %s\n", reason.c_str());
 }
 
