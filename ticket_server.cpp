@@ -1,13 +1,12 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <stdarg.h>
-
+#include <cstdarg>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <vector>
@@ -95,7 +94,7 @@ public:
         value = cookie;
     }
 
-    Cookie(char *buffer) {
+    Cookie(const char *buffer) {
         std::string cookie(COOKIE_LENGTH, '\0');
         for (int i = 0; i < COOKIE_LENGTH; ++i) {
             cookie[i] = buffer[i + 5];
@@ -113,24 +112,24 @@ public:
 };
 
 class TicketGenerator {
-private: 
+private:
     char last_ticket[TICKET_LENGTH];
 
 public:
     TicketGenerator() {
-        for (int i = 0; i < TICKET_LENGTH; ++i)
-            last_ticket[i] = '0';
+        for (char &i : last_ticket)
+            i = '0';
     }
 
     std::string generate_next_ticket() {
-        for (int i = 0; i < TICKET_LENGTH; ++i) {
-            if (last_ticket[i] == 'Z') {
-                last_ticket[i] = '0';
-            } else if (last_ticket[i] == '9') {
-                last_ticket[i] = 'A';
+        for (char &i : last_ticket) {
+            if (i == 'Z') {
+                i = '0';
+            } else if (i == '9') {
+                i = 'A';
                 break;
             } else {
-                last_ticket[i]++;
+                i++;
                 break;
             }
         }
@@ -145,7 +144,7 @@ typedef struct eventStruct Event;
 struct reservationStruct {
     uint32_t reservation_id; // little endian
     uint32_t event_id; // little endian
-    uint16_t ticket_count; // litlle endian
+    uint16_t ticket_count; // litle endian
     Cookie cookie; // 48 bytes
     uint64_t expiration_time; // little endian
     std::vector<std::string> tickets;
@@ -193,10 +192,13 @@ uint32_t calc_id() {
 // Calculate ticket count from message stored in shared_buffer.
 // MAX_BYTE_VALUE + 1 (256) is added to both numbers to avoid
 // negative numbers, since we want to read them as unsigned.
+// 5th and 6th bytes contain information about ticket count, in big endian.
 uint16_t calc_ticket_count() {
-    return (uint16_t) (((shared_buffer[5] + MAX_BYTE_VALUE + 1) % (MAX_BYTE_VALUE + 1)) * (MAX_BYTE_VALUE + 1)) +
+    return (uint16_t) (
+            ((shared_buffer[5] + MAX_BYTE_VALUE + 1) % (MAX_BYTE_VALUE + 1)) *
+            (MAX_BYTE_VALUE + 1)) +
            ((shared_buffer[6] + MAX_BYTE_VALUE + 1) %
-                     (MAX_BYTE_VALUE + 1));
+            (MAX_BYTE_VALUE + 1));
 }
 
 bool message_is_get_events(size_t read_length) {
@@ -226,12 +228,12 @@ bool tickets_expired(ReservationsMap &reservations) {
 void update_reservations_for_event(EventsMap &events, uint32_t event_id,
                                    ReservationsMap &reservations) {
     uint64_t current_time = time(0);
-    while (events[event_id].unreceived_reservations.size() > 0) {
+    while (!events[event_id].unreceived_reservations.empty()) {
         Reservation oldest_reservation = events[event_id].unreceived_reservations.front();
         if (reservations[oldest_reservation.reservation_id].tickets_received) {
             events[event_id].unreceived_reservations.pop();
         } else if (
-               oldest_reservation.expiration_time <= current_time) {
+                oldest_reservation.expiration_time <= current_time) {
             events[event_id].tickets_available += oldest_reservation.ticket_count;
             events[event_id].unreceived_reservations.pop();
         } else {
@@ -245,7 +247,8 @@ bool tickets_arguments_are_correct(ReservationsMap &reservations) {
 
     return potential_reservation_id >= MIN_RESERVATION_ID &&
            reservations.find(potential_reservation_id) != reservations.end() &&
-            reservations[potential_reservation_id].cookie == Cookie({shared_buffer});
+           reservations[potential_reservation_id].cookie ==
+           Cookie(shared_buffer);
 }
 
 bool reservation_arguments_are_correct(EventsMap &events,
@@ -313,7 +316,9 @@ Reservation create_reservation(uint16_t timeout, EventsMap &events,
         tickets.push_back(ticket);
     }
 
-    Reservation result = Reservation({reservation_id, event_id, ticket_count, next_cookie, expiration_time, tickets, false});
+    Reservation result = Reservation(
+            {reservation_id, event_id, ticket_count, next_cookie,
+             expiration_time, tickets, false});
     events[event_id].unreceived_reservations.push(result);
 
     return result;
@@ -326,35 +331,42 @@ void append_id(std::string &message, uint32_t id, uint32_t &current_index) {
     current_index += sizeof(reservation_id_copy);
 }
 
-void append_ticket_count(std::string &message, uint16_t tickets_count_b_end, uint32_t &current_index) {
-    memcpy(&message[current_index], &tickets_count_b_end,
-           sizeof(tickets_count_b_end));
-    current_index += sizeof(tickets_count_b_end); // tickets count is sent in big endian
+void append_ticket_count(std::string &message,
+                         uint16_t tickets_count_big_endian,
+                         uint32_t &current_index) {
+    memcpy(&message[current_index], &tickets_count_big_endian,
+           sizeof(tickets_count_big_endian));
+    current_index += sizeof(tickets_count_big_endian); // tickets count is sent in big endian
 }
 
-void append_description(std::string &message, std::string &description, uint32_t &current_index) {
+void append_description(std::string &message, std::string &description,
+                        uint32_t &current_index) {
     strcpy(&message[current_index], description.c_str());
     current_index += description.size();
 }
 
-void append_description_length(std::string &message, char description_length, uint32_t &current_index) {
+void append_description_length(std::string &message, char description_length,
+                               uint32_t &current_index) {
     memcpy(&message[current_index], &description_length,
            sizeof(description_length));
-    current_index += sizeof(description_length); // only one byte, so big endian as well
+    current_index += sizeof(description_length); // only one byte, so big endian
 }
 
-void append_cookie(std::string &message, Cookie cookie, uint32_t &current_index) {
+void append_cookie(std::string &message,
+                   Cookie cookie, uint32_t &current_index) {
     strcpy(&message[current_index], cookie.get_value().c_str());
     current_index += cookie.get_value().size();
 }
 
-void append_ticket(std::string &message, std::string ticket, uint32_t &current_index) {
+void append_ticket(std::string &message, std::string &ticket,
+                   uint32_t &current_index) {
     strcpy(&message[current_index], ticket.c_str());
-    current_index += ticket.size();  
+    current_index += ticket.size();
 }
 
 
-MessageInfo make_tickets_message(ReservationsMap &reservations, uint32_t reservation_id) {
+MessageInfo make_tickets_message(ReservationsMap &reservations,
+                                 uint32_t reservation_id) {
     std::string tickets_message(MAX_UDP_DATAGRAM_SIZE, '\0');
     uint32_t current_index = 1;
     tickets_message[0] = char(SEND_TICKETS_ID);
@@ -365,7 +377,7 @@ MessageInfo make_tickets_message(ReservationsMap &reservations, uint32_t reserva
             reservations[reservation_id].ticket_count);
     append_ticket_count(tickets_message, tickets_count_copy, current_index);
 
-    for (auto ticket : reservations[reservation_id].tickets) 
+    for (auto ticket : reservations[reservation_id].tickets)
         append_ticket(tickets_message, ticket, current_index);
 
     tickets_message.resize(current_index);
@@ -381,17 +393,20 @@ void send_tickets(int socket_fd, const sockaddr_in *client_address,
     socklen_t address_length = (socklen_t) sizeof(*client_address);
     int flags = 0;
     uint32_t reservation_id = calc_id();
-    MessageInfo message_info = make_tickets_message(reservations, reservation_id);
+    MessageInfo message_info = make_tickets_message(reservations,
+                                                    reservation_id);
 
     ssize_t sent_length = sendto(socket_fd, message_info.first.c_str(),
                                  message_info.second,
                                  flags, (struct sockaddr *) client_address,
                                  address_length);
     ENSURE(sent_length == (ssize_t) message_info.first.length());
-    std::cout << "[SEND TICKETS]     Tickets for reservation nr " << reservation_id << " sent successfully.\n";
+    std::cout << "[SEND TICKETS]     Tickets for reservation nr "
+              << reservation_id << " sent successfully.\n";
 }
 
-MessageInfo make_reservation_message(ReservationsMap &reservations, Reservation &to_be_sent) {
+MessageInfo make_reservation_message(ReservationsMap &reservations,
+                                     Reservation &to_be_sent) {
     reservations[to_be_sent.reservation_id] = to_be_sent;
 
     uint32_t current_index = 1;
@@ -401,7 +416,7 @@ MessageInfo make_reservation_message(ReservationsMap &reservations, Reservation 
 
     append_id(reservation_message, to_be_sent.reservation_id, current_index);
 
-    append_id(reservation_message, to_be_sent.event_id, current_index);    
+    append_id(reservation_message, to_be_sent.event_id, current_index);
 
     uint16_t tickets_count_copy = htons(to_be_sent.ticket_count);
     append_ticket_count(reservation_message, tickets_count_copy, current_index);
@@ -428,25 +443,29 @@ void send_reservation(int socket_fd, const sockaddr_in *client_address,
     int flags = 0;
 
     Reservation to_be_sent = create_reservation(timeout, events, reservations);
-    MessageInfo message_info = make_reservation_message(reservations, to_be_sent);
+    MessageInfo message_info = make_reservation_message(reservations,
+                                                        to_be_sent);
 
     ssize_t sent_length = sendto(socket_fd, message_info.first.c_str(),
                                  message_info.second, flags,
                                  (struct sockaddr *) client_address,
                                  address_length);
     ENSURE(sent_length == (ssize_t) message_info.first.length());
-    std::cout << "[SEND RESERVATION] Reservation nr " << to_be_sent.reservation_id << 
-            " for event nr " << to_be_sent.event_id << " sent successfully.\n";
+    std::cout << "[SEND RESERVATION] Reservation nr "
+              << to_be_sent.reservation_id <<
+              " for event nr " << to_be_sent.event_id
+              << " sent successfully.\n";
 }
 
 uint32_t next_message_size(Event &event) {
-    return sizeof(event.event_id) + 
-            sizeof(event.tickets_available) + 
-            sizeof(event.description_length) + 
-            event.description_length;
+    return sizeof(event.event_id) +
+           sizeof(event.tickets_available) +
+           sizeof(event.description_length) +
+           event.description_length;
 }
 
-MessageInfo make_events_message(ReservationsMap &reservations, EventsMap &events) {
+MessageInfo make_events_message(ReservationsMap &reservations,
+                                EventsMap &events) {
     uint32_t current_index = 1;
     std::string events_message(MAX_UDP_DATAGRAM_SIZE, '\0');
     events_message[0] = char(SEND_EVENTS_ID);
@@ -455,16 +474,19 @@ MessageInfo make_events_message(ReservationsMap &reservations, EventsMap &events
         uint16_t tickets_count_copy = ev.second.tickets_available;
         tickets_count_copy = htons(tickets_count_copy); // send in big endian
 
-        if (current_index + next_message_size(ev.second) > MAX_UDP_DATAGRAM_SIZE)
+        if (current_index + next_message_size(ev.second) >
+            MAX_UDP_DATAGRAM_SIZE)
             break;
 
         append_id(events_message, ev.second.event_id, current_index);
 
         append_ticket_count(events_message, tickets_count_copy, current_index);
 
-        append_description_length(events_message, ev.second.description_length, current_index);
+        append_description_length(events_message, ev.second.description_length,
+                                  current_index);
 
-        append_description(events_message, ev.second.description, current_index);
+        append_description(events_message, ev.second.description,
+                           current_index);
 
     }
     events_message.resize(current_index);
@@ -499,7 +521,8 @@ void send_bad_reservation_request(int socket_fd,
                                  (struct sockaddr *) client_address,
                                  address_length);
     ENSURE(sent_length == (ssize_t) length);
-    std::cout << "[SEND RESERVATION] Bad request for reservation nr " << calc_id() << ". \n";
+    std::cout << "[SEND RESERVATION] Bad request for reservation nr "
+              << calc_id() << ". \n";
 }
 
 void send_bad_tickets_request(int socket_fd,
@@ -519,7 +542,8 @@ void send_bad_tickets_request(int socket_fd,
 }
 
 void notify_for_pointless_message(uint16_t port_num) {
-    std::cout << "[UNKNOWN MESSAGE]  Not supported message received from port" << port_num <<  ". \n";
+    std::cout << "[UNKNOWN MESSAGE]  Not supported message received from port"
+              << port_num << ". \n";
 }
 
 void check_port_num(char *port_c) {
@@ -545,26 +569,31 @@ void check_timeout_value(char *timeout_c) {
 }
 
 void notify_for_wrong_server_parameters(std::string reason) {
-    std::cout << "[SERVER USAGE]     {argv[0]} -f <path to events file> [-p <port>] [-t <timeout>]\n";
+    std::cout
+            << "[SERVER USAGE]     {argv[0]} -f <path to events file> [-p <port>] [-t <timeout>]\n";
     fatal("[SERVER USAGE]     %s\n", reason.c_str());
 }
 
-void notify_for_correct_server_parameters(uint16_t port_num, uint16_t timeout, char *filename) {
-    std::cout << "[SERVER USAGE]     Server starting with file = " << filename << ", port = " 
-                << port_num << ", timeout = " << timeout << ". \n";
+void notify_for_correct_server_parameters(uint16_t port_num, uint16_t timeout,
+                                          char *filename) {
+    std::cout << "[SERVER USAGE]     Server starting with file = " << filename
+              << ", port = "
+              << port_num << ", timeout = " << timeout << ". \n";
 }
 
 void notify_for_correct_message(std::string message, uint16_t port_num) {
-    std::cout << message << "Received correct message from port " << port_num << ". \n";
+    std::cout << message << "Received correct message from port " << port_num
+              << ". \n";
 }
 
 void notify_for_bad_request(std::string message, uint16_t port_num) {
-    std::cout << message << "Received bad request from port " << port_num << ". \n";
+    std::cout << message << "Received bad request from port " << port_num
+              << ". \n";
 }
 
 void read_input(int argc, char *argv[], uint16_t *port_num, uint16_t *timeout,
                 char **filename) {
-    if (argc < 3) 
+    if (argc < 3)
         notify_for_wrong_server_parameters("Not enough arguments provided");
 
     bool filename_found = false, port_num_found = false, timeout_found = false;
@@ -573,18 +602,20 @@ void read_input(int argc, char *argv[], uint16_t *port_num, uint16_t *timeout,
 
         if (arg == "-f" && !filename_found) {
             *filename = argv[++i];
-            if (access(*filename, F_OK) != 0) 
+            if (access(*filename, F_OK) != 0)
                 notify_for_wrong_server_parameters("Wrong filename provided.");
             filename_found = true;
         } else if (arg == "-p" && !port_num_found) {
-            if (argc < i + 2) 
-                notify_for_wrong_server_parameters("Not enough parameters provided.");             
+            if (argc < i + 2)
+                notify_for_wrong_server_parameters(
+                        "Not enough parameters provided.");
             check_port_num(argv[++i]);
             *port_num = atoi(argv[i]);
             port_num_found = true;
         } else if (arg == "-t" && !timeout_found) {
-            if (argc < i + 2) 
-                notify_for_wrong_server_parameters("Not enough parameters provided.");
+            if (argc < i + 2)
+                notify_for_wrong_server_parameters(
+                        "Not enough parameters provided.");
             check_timeout_value(argv[++i]);
             *timeout = atoi(argv[i]);
             timeout_found = true;
@@ -649,17 +680,15 @@ int main(int argc, char *argv[]) {
         } else if (message_is_get_tickets(read_length)) {
             if (tickets_arguments_are_correct(reservations) &&
                 !tickets_expired(reservations)) {
-                    notify_for_correct_message("[GET TICKETS]      ", port);
-                    send_tickets(socket_fd, &client_address, reservations);
-                }
-            else {
+                notify_for_correct_message("[GET TICKETS]      ", port);
+                send_tickets(socket_fd, &client_address, reservations);
+            } else {
                 notify_for_bad_request("[GET TICKETS]      ", port);
                 send_bad_tickets_request(socket_fd, &client_address);
             }
         } else {
             notify_for_pointless_message(port);
         }
-
     } while (read_length > 0);
     std::cout << "[SERVER USAGE]     Finished exchange\n";
 
