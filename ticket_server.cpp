@@ -159,11 +159,9 @@ struct eventStruct {
     std::queue<Reservation> unreceived_reservations;
 };
 
-
 // Key: event_id in little endian
 // Value: event struct
 using EventsMap = std::map<uint32_t, Event>;
-
 
 // Key: reservation_id in little endian
 // Value: reservation struct
@@ -542,9 +540,9 @@ void send_bad_tickets_request(int socket_fd,
     std::cout << "[SEND TICKETS]     Bad request.\n";
 }
 
-void notify_for_pointless_message(uint16_t port_num) {
-    std::cout << "[UNKNOWN MESSAGE]  Not supported message received from port"
-              << port_num << ". \n";
+void notify_for_pointless_message(uint16_t port_num, char *client_ip) {
+    std::cout << "[UNKNOWN MESSAGE]  Not supported message received from "
+                 "client " << client_ip << ":" << port_num << ". \n";
 }
 
 void check_port_num(char *port_c) {
@@ -578,18 +576,20 @@ void notify_for_wrong_server_parameters(std::string reason) {
 void notify_for_correct_server_parameters(uint16_t port_num, uint16_t timeout,
                                           char *filename) {
     std::cout << "[SERVER USAGE]     Server starting with file = " << filename
-              << ", port = "
-              << port_num << ", timeout = " << timeout << ". \n";
+              << ", port = " << port_num << ", timeout = " 
+              << timeout << ". \n";
 }
 
-void notify_for_correct_message(std::string message, uint16_t port_num) {
-    std::cout << message << "Received correct message from port " << port_num
-              << ". \n";
+void notify_for_correct_message(std::string message,
+                                uint16_t port_num, char *client_ip) {
+    std::cout << message << "Received correct message from client " 
+              << client_ip << ":" << port_num << ". \n";
 }
 
-void notify_for_bad_request(std::string message, uint16_t port_num) {
-    std::cout << message << "Received bad request from port " << port_num
-              << ". \n";
+void notify_for_bad_request(std::string message,
+                            uint16_t port_num, char *client_ip) {
+    std::cout << message << "Received bad request from client " 
+              << client_ip << ":" << port_num << ". \n";
 }
 
 void read_input(int argc, char *argv[], uint16_t *port_num, uint16_t *timeout,
@@ -665,30 +665,31 @@ int main(int argc, char *argv[]) {
     do {
         read_length = read_message(socket_fd, &client_address, shared_buffer,
                                    sizeof(shared_buffer));
-
+        char* client_ip = inet_ntoa(client_address.sin_addr);
+        uint16_t client_port = ntohs(client_address.sin_port);
         if (message_is_get_events(read_length)) {
-            notify_for_correct_message("[GET EVENTS]       ", port);
+            notify_for_correct_message("[GET EVENTS]       ", client_port, client_ip);
             send_events(socket_fd, &client_address, events, reservations);
         } else if (message_is_get_reservation(read_length)) {
             if (reservation_arguments_are_correct(events, reservations)) {
-                notify_for_correct_message("[GET RESERVATION]  ", port);
+                notify_for_correct_message("[GET RESERVATION]  ", client_port, client_ip);
                 send_reservation(socket_fd, &client_address, events,
                                  reservations, timeout);
             } else {
-                notify_for_bad_request("[GET RESERVATION]  ", port);
+                notify_for_bad_request("[GET RESERVATION]  ", client_port, client_ip);
                 send_bad_reservation_request(socket_fd, &client_address);
             }
         } else if (message_is_get_tickets(read_length)) {
             if (tickets_arguments_are_correct(reservations) &&
                 !tickets_expired(reservations)) {
-                notify_for_correct_message("[GET TICKETS]      ", port);
+                notify_for_correct_message("[GET TICKETS]      ", client_port, client_ip);
                 send_tickets(socket_fd, &client_address, reservations);
             } else {
-                notify_for_bad_request("[GET TICKETS]      ", port);
+                notify_for_bad_request("[GET TICKETS]      ", client_port, client_ip);
                 send_bad_tickets_request(socket_fd, &client_address);
             }
         } else {
-            notify_for_pointless_message(port);
+            notify_for_pointless_message(client_port, client_ip);
         }
     } while (read_length > 0);
     std::cout << "[SERVER USAGE]     Finished exchange\n";
