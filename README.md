@@ -1,5 +1,5 @@
 # sik-1
-My first program for Computer Network course at the University of Warsaw. It's a UDP server for buying, reserving and receiveing tickets for events such as movies at the cinema. Below is the intire content of the task (in Polish).
+My first program for Computer Network course at the University of Warsaw. It's a UDP server for buying, reserving and receiveing tickets for events such as movies at the cinema. Below is the entire content of the task (in Polish).
 
 Sieciowa rezerwacja biletów
 
